@@ -106,6 +106,25 @@ def _apply_collision(stage: Usd.Stage, mesh_path: Sdf.Path) -> None:
     mesh_col.CreateApproximationAttr("convexHull")
 
 
+def _skip_collision_for_part(part_name: str) -> bool:
+    """True for meshes that should NOT get colliders.
+
+    Knobs/handles are children of doors/drawers but have no RigidBodyAPI. Isaac Sim
+    shift+drag picking hits colliders — if the user clicks the knob, PhysX targets a
+    shape with no body and nothing moves. Skip collision so the ray hits the parent
+    door/drawer mesh instead.
+
+    Inferred dividers are visual/structural only; their thin colliders steal picks
+    near door edges and are not meant to be dragged.
+    """
+    n = part_name.lower()
+    if "knob" in n or "handle" in n:
+        return True
+    if "divider" in n:
+        return True
+    return False
+
+
 def _apply_mass(stage: Usd.Stage, path: Sdf.Path, mass_kg: float) -> None:
     """Apply MassAPI to an Xform prim."""
     prim = stage.GetPrimAtPath(path)
@@ -416,15 +435,21 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
             print(f"    (skip RigidBody — grandchild) {name}")
             pass
 
-        # CollisionAPI on each Mesh child
+        # CollisionAPI on each Mesh child (skip decoy geometry — see _skip_collision_for_part)
         mesh_paths = _find_mesh_children(stage, xform_path)
-        for mp in mesh_paths:
-            _apply_collision(stage, mp)
+        n_col_meshes = 0
+        if _skip_collision_for_part(name):
+            pass
+        else:
+            for mp in mesh_paths:
+                _apply_collision(stage, mp)
+                n_col_meshes += 1
 
         # MassAPI on Xform
         _apply_mass(stage, xform_path, mass)
 
-        print(f"    {name:<30s}  mass={mass:.2f}kg  meshes={len(mesh_paths)}")
+        col_note = f"  colliders={n_col_meshes}" if n_col_meshes else "  (no mesh colliders — visual only)"
+        print(f"    {name:<30s}  mass={mass:.2f}kg  meshes={len(mesh_paths)}{col_note}")
 
     # ── Step 5: Joints ───────────────────────────────────────────────
     if articulation == "ARTICULATED":
