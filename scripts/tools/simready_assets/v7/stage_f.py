@@ -209,46 +209,54 @@ def _dispatch_joint(
     joints_scope: str,
     root_body_path: Sdf.Path,
 ) -> None:
-    """Create the right joint for one part."""
-    name     = p["part"]
-    btype    = p.get("behavior", {}).get("behavior_type", "CONTACT_BASED")
-    parent   = p.get("parent", "")
-    dims     = p["dims_reconciled"]
-    pivot    = p.get("pivot", "")
+    """Create the right joint for one part.
+
+    LocalPos computation:
+    - Most parts have NO Xform translate in USD (positions baked into mesh vertices
+      by Blender's USD exporter after transform_apply). Their body frame origin is
+      at world (0,0,0). So localPos = world position of anchor (from spec position_xyz).
+    - Parts with an Xform translate (only cylinder/knob parts) store their translate
+      in the parent's local frame. For those, use xform_translate as localPos0 and
+      (0,0,0) as localPos1 (center of body in its own frame).
+    """
+    name   = p["part"]
+    btype  = p.get("behavior", {}).get("behavior_type", "CONTACT_BASED")
+    parent = p.get("parent", "")
+    dims   = p["dims_reconciled"]
+    pivot  = p.get("pivot", "")
+    cx, cy, cz = p["position_xyz"]  # world center from spec
 
     part_path = _find_part_xform(stage, name)
     if not part_path:
         print(f"    [F] ✗ Part Xform not found: {name}")
         return
 
-    # Resolve body0 path (parent body)
     if parent in ("none", None, ""):
-        return  # root body — no joint needed
+        return  # root body — no joint
 
     parent_path = _find_part_xform(stage, parent)
     if not parent_path:
         print(f"    [F] ✗ Parent Xform not found: {parent} for {name}")
         return
 
-    # Joint anchor positions
-    # body1 (child) local_pos1 = (0,0,0) because Blender origin IS the anchor
-    local_pos1 = Gf.Vec3f(0, 0, 0)
-    # body0 (parent) local_pos0 = where the child's pivot sits in parent's frame
-    child_xform_t = _get_xform_translate(stage, part_path)
-    local_pos0 = Gf.Vec3f(child_xform_t[0], child_xform_t[1], child_xform_t[2])
-
     joint_path = Sdf.Path(f"{joints_scope}/{name}_joint")
 
     if btype == "ROTATIONAL":
-        # Revolute joint — door hinge
-        # Determine open direction by pivot side
+        # Revolute joint — door hinge along Z axis
+        # Hinge is at left or right edge of door
+        w = dims["width_mm"] / 1000
         pivot_lower = pivot.lower()
         if "right" in pivot_lower:
-            # Right edge hinge: rotates counterclockwise from closed
+            hinge_x = round(cx + w / 2, 4)
             lower_deg, upper_deg = 0.0, 120.0
         else:
-            # Left edge hinge: rotates clockwise
+            hinge_x = round(cx - w / 2, 4)
             lower_deg, upper_deg = -120.0, 0.0
+
+        # Both door and main_frame have no Xform translate (mesh-baked).
+        # Their body frames are at world origin, so localPos = world hinge position.
+        local_pos0 = Gf.Vec3f(hinge_x, cy, cz)
+        local_pos1 = Gf.Vec3f(hinge_x, cy, cz)
 
         _make_revolute_joint(
             stage, joint_path,
@@ -257,11 +265,17 @@ def _dispatch_joint(
             lower_deg, upper_deg,
             pivot_lower,
         )
-        print(f"    [F] RevoluteJoint  {name:<30s}  axis=Z  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
+        print(f"    [F] RevoluteJoint  {name:<30s}  hinge_x={hinge_x:.3f}  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
 
     elif btype == "LINEAR_TRANSLATIONAL":
-        # Prismatic joint — drawer slides out along Y (depth)
-        max_travel = round(dims["depth_mm"] / 1000 * 0.85, 3)  # 85% of depth
+        # Prismatic joint — drawer slides in +Y (out toward user)
+        max_travel = round(dims["depth_mm"] / 1000 * 0.85, 3)
+
+        # Drawer has no Xform translate; body frame at world origin.
+        # Anchor = drawer world center from spec.
+        local_pos0 = Gf.Vec3f(cx, cy, cz)
+        local_pos1 = Gf.Vec3f(cx, cy, cz)
+
         _make_prismatic_joint(
             stage, joint_path,
             parent_path, part_path,
@@ -272,7 +286,20 @@ def _dispatch_joint(
         print(f"    [F] PrismaticJoint {name:<30s}  axis=Y  limits=[0m, {max_travel}m]")
 
     else:
-        # Fixed joint — handles, knobs, top panel
+        # Fixed joint — handles, knobs, dividers, top panel
+        child_xform_t = _get_xform_translate(stage, part_path)
+        has_xform = any(v != 0 for v in child_xform_t)
+
+        if has_xform:
+            # Part has an Xform translate (e.g. knobs created at origin then located).
+            # The translate value is LOCAL to the parent's frame.
+            local_pos0 = Gf.Vec3f(child_xform_t[0], child_xform_t[1], child_xform_t[2])
+            local_pos1 = Gf.Vec3f(0, 0, 0)
+        else:
+            # Baked position — both frames at world origin, use spec center.
+            local_pos0 = Gf.Vec3f(cx, cy, cz)
+            local_pos1 = Gf.Vec3f(cx, cy, cz)
+
         _make_fixed_joint(
             stage, joint_path,
             parent_path, part_path,
@@ -345,6 +372,7 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
     for p in parts:
         name      = p["part"]
         dims      = p["dims_reconciled"]
+        is_root   = p.get("parent") in ("none", None, "")
         xform_path = _find_part_xform(stage, name)
         if not xform_path:
             print(f"    ✗ Xform not found: {name}")
@@ -352,8 +380,10 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
 
         mass = _estimate_mass(name, dims)
 
-        # RigidBodyAPI on Xform
-        _apply_rigid_body(stage, xform_path)
+        # RigidBodyAPI: skip root body — ArticulationRootAPI alone marks it as fixed base.
+        # Adding RigidBodyAPI to root makes the entire articulation float freely.
+        if not is_root:
+            _apply_rigid_body(stage, xform_path)
 
         # CollisionAPI on each Mesh child
         mesh_paths = _find_mesh_children(stage, xform_path)
