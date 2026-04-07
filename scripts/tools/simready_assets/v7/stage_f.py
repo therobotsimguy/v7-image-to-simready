@@ -242,21 +242,20 @@ def _dispatch_joint(
     joint_path = Sdf.Path(f"{joints_scope}/{name}_joint")
 
     if btype == "ROTATIONAL":
-        # Revolute joint — door hinge along Z axis
-        # Hinge is at left or right edge of door
-        w = dims["width_mm"] / 1000
+        # Revolute joint — door hinge along Z axis.
+        # Stage D moved the door's Blender origin to the hinge edge, so the USD
+        # Xform translate = hinge world position. Joint anchor = (0,0,0) in both
+        # body frames (origin IS the pivot).
         pivot_lower = pivot.lower()
         if "right" in pivot_lower:
-            hinge_x = round(cx + w / 2, 4)
             lower_deg, upper_deg = 0.0, 120.0
         else:
-            hinge_x = round(cx - w / 2, 4)
             lower_deg, upper_deg = -120.0, 0.0
 
-        # Both door and main_frame have no Xform translate (mesh-baked).
-        # Their body frames are at world origin, so localPos = world hinge position.
-        local_pos0 = Gf.Vec3f(hinge_x, cy, cz)
-        local_pos1 = Gf.Vec3f(hinge_x, cy, cz)
+        # Read hinge position from USD Xform translate (set by Stage D)
+        hinge_t = _get_xform_translate(stage, part_path)
+        local_pos0 = Gf.Vec3f(hinge_t[0], hinge_t[1], hinge_t[2])
+        local_pos1 = Gf.Vec3f(0, 0, 0)  # origin = hinge
 
         _make_revolute_joint(
             stage, joint_path,
@@ -265,16 +264,17 @@ def _dispatch_joint(
             lower_deg, upper_deg,
             pivot_lower,
         )
-        print(f"    [F] RevoluteJoint  {name:<30s}  hinge_x={hinge_x:.3f}  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
+        print(f"    [F] RevoluteJoint  {name:<30s}  hinge={tuple(round(v,3) for v in hinge_t)}  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
 
     elif btype == "LINEAR_TRANSLATIONAL":
-        # Prismatic joint — drawer slides in +Y (out toward user)
+        # Prismatic joint — drawer slides in +Y (out toward user).
+        # Stage D moved drawer origin to back face. USD Xform translate = back-face
+        # world position. Joint anchor = (0,0,0) in both frames.
         max_travel = round(dims["depth_mm"] / 1000 * 0.85, 3)
 
-        # Drawer has no Xform translate; body frame at world origin.
-        # Anchor = drawer world center from spec.
-        local_pos0 = Gf.Vec3f(cx, cy, cz)
-        local_pos1 = Gf.Vec3f(cx, cy, cz)
+        slide_t = _get_xform_translate(stage, part_path)
+        local_pos0 = Gf.Vec3f(slide_t[0], slide_t[1], slide_t[2])
+        local_pos1 = Gf.Vec3f(0, 0, 0)  # origin = slide start
 
         _make_prismatic_joint(
             stage, joint_path,

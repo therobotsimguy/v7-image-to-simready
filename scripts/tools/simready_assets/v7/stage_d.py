@@ -144,8 +144,24 @@ def _box_part(p: dict) -> str:
     # Material
     code += _mat_block(name, mat)
 
-    # Pivot: NOT set here — Stage F handles localPos0 in the USD RevoluteJoint.
-    # Shifting the Blender origin causes parenting cascade bugs with no sim benefit.
+    # Shift origin to joint pivot so USD exports Xform translate = pivot position.
+    # Physics body frame = pivot → localPos (0,0,0) works correctly in Isaac Sim.
+    pivot_lower = pivot.lower()
+    if btype == "ROTATIONAL":
+        # Door hinge: origin → left or right edge, vertically centered
+        if "right" in pivot_lower:
+            ox = f"{w/2}"   # right edge
+        else:
+            ox = f"-{w/2}"  # left edge (default)
+        code += f"""
+    # Shift origin to hinge edge (pivot for revolute joint)
+    set_origin_keep_visual(obj, {ox}, 0.0, 0.0)"""
+
+    elif btype == "LINEAR_TRANSLATIONAL":
+        # Drawer slide: origin → back face center (slide-start position)
+        code += f"""
+    # Shift origin to back face (pivot for prismatic joint)
+    set_origin_keep_visual(obj, 0.0, -{d/2}, 0.0)"""
 
     # Smooth shading
     code += f"""

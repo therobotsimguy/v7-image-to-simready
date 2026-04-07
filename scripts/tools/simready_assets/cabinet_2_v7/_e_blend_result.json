@@ -1,0 +1,734 @@
+{
+  "objects": [
+    {
+      "part": "main_frame",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            1.5,
+            0.55,
+            0.87
+          ],
+          "actual_m": [
+            1.5,
+            0.55,
+            0.87
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "none",
+          "actual": "none"
+        },
+        {
+          "check": "cavity_deleted",
+          "status": "PASS",
+          "front_faces_remaining": 0
+        }
+      ]
+    },
+    {
+      "part": "top_surface",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            1.5,
+            0.55,
+            0.03
+          ],
+          "actual_m": [
+            1.5,
+            0.55,
+            0.03
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "left_drawer",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.57,
+            0.5,
+            0.18
+          ],
+          "actual_m": [
+            0.57,
+            0.5,
+            0.18
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "middle_drawer",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.375,
+            0.5,
+            0.18
+          ],
+          "actual_m": [
+            0.375,
+            0.5,
+            0.18
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "right_drawer",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.375,
+            0.5,
+            0.18
+          ],
+          "actual_m": [
+            0.375,
+            0.5,
+            0.18
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "left_door",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.57,
+            0.022,
+            0.57
+          ],
+          "actual_m": [
+            0.57,
+            0.022,
+            0.57
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        },
+        {
+          "check": "pivot_origin",
+          "status": "INFO",
+          "pivot_spec": "left edge hinge",
+          "actual_origin": [
+            -0.285,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "part": "middle_door",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.375,
+            0.022,
+            0.57
+          ],
+          "actual_m": [
+            0.375,
+            0.022,
+            0.57
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        },
+        {
+          "check": "pivot_origin",
+          "status": "INFO",
+          "pivot_spec": "left edge hinge",
+          "actual_origin": [
+            -0.1875,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "part": "right_door",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.375,
+            0.022,
+            0.57
+          ],
+          "actual_m": [
+            0.375,
+            0.022,
+            0.57
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        },
+        {
+          "check": "pivot_origin",
+          "status": "INFO",
+          "pivot_spec": "right edge hinge",
+          "actual_origin": [
+            0.1875,
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    {
+      "part": "left_drawer_handle",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.16,
+            0.035,
+            0.03
+          ],
+          "actual_m": [
+            0.16,
+            0.035,
+            0.03
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "left_drawer",
+          "actual": "left_drawer"
+        }
+      ]
+    },
+    {
+      "part": "middle_drawer_handle",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.16,
+            0.035,
+            0.03
+          ],
+          "actual_m": [
+            0.16,
+            0.035,
+            0.03
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "middle_drawer",
+          "actual": "middle_drawer"
+        }
+      ]
+    },
+    {
+      "part": "right_drawer_handle",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.16,
+            0.035,
+            0.03
+          ],
+          "actual_m": [
+            0.16,
+            0.035,
+            0.03
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "right_drawer",
+          "actual": "right_drawer"
+        }
+      ]
+    },
+    {
+      "part": "left_door_knob",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.032,
+            0.028,
+            0.032
+          ],
+          "actual_m": [
+            0.032,
+            0.028,
+            0.032
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "left_door",
+          "actual": "left_door"
+        }
+      ]
+    },
+    {
+      "part": "middle_door_knob",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.032,
+            0.028,
+            0.032
+          ],
+          "actual_m": [
+            0.032,
+            0.028,
+            0.032
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "middle_door",
+          "actual": "middle_door"
+        }
+      ]
+    },
+    {
+      "part": "right_door_knob",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.032,
+            0.028,
+            0.032
+          ],
+          "actual_m": [
+            0.032,
+            0.028,
+            0.032
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "right_door",
+          "actual": "right_door"
+        }
+      ]
+    },
+    {
+      "part": "door_divider_1",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.02,
+            0.55,
+            0.57
+          ],
+          "actual_m": [
+            0.02,
+            0.55,
+            0.57
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "door_divider_2",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.02,
+            0.55,
+            0.57
+          ],
+          "actual_m": [
+            0.02,
+            0.55,
+            0.57
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "drawer_divider_1",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.02,
+            0.55,
+            0.18
+          ],
+          "actual_m": [
+            0.02,
+            0.55,
+            0.18
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    },
+    {
+      "part": "drawer_divider_2",
+      "found": true,
+      "checks": [
+        {
+          "check": "exists",
+          "status": "PASS"
+        },
+        {
+          "check": "dims",
+          "status": "PASS",
+          "expected_m": [
+            0.02,
+            0.55,
+            0.18
+          ],
+          "actual_m": [
+            0.02,
+            0.55,
+            0.18
+          ]
+        },
+        {
+          "check": "material",
+          "status": "PASS"
+        },
+        {
+          "check": "smooth_shading",
+          "status": "PASS"
+        },
+        {
+          "check": "parent",
+          "status": "PASS",
+          "expected": "main_frame",
+          "actual": "main_frame"
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "check": "object_count",
+      "status": "PASS",
+      "expected": 12,
+      "actual": 18
+    }
+  ],
+  "pass": true,
+  "scene_object_count": 18,
+  "spec_part_count": 18
+}

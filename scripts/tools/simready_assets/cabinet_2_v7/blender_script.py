@@ -84,6 +84,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to back face (pivot for prismatic joint)
+    set_origin_keep_visual(obj, 0.0, -0.25, 0.0)
     bpy.ops.object.shade_smooth()
     # ── middle_drawer ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.0, 0.025, 0.7))
@@ -100,6 +102,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to back face (pivot for prismatic joint)
+    set_origin_keep_visual(obj, 0.0, -0.25, 0.0)
     bpy.ops.object.shade_smooth()
     # ── right_drawer ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.4551, 0.025, 0.7))
@@ -116,6 +120,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to back face (pivot for prismatic joint)
+    set_origin_keep_visual(obj, 0.0, -0.25, 0.0)
     bpy.ops.object.shade_smooth()
     # ── left_door ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(-0.4551, 0.264, 0.305))
@@ -132,6 +138,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to hinge edge (pivot for revolute joint)
+    set_origin_keep_visual(obj, -0.285, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── middle_door ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.0, 0.264, 0.305))
@@ -148,6 +156,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to hinge edge (pivot for revolute joint)
+    set_origin_keep_visual(obj, -0.1875, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── right_door ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.4551, 0.264, 0.305))
@@ -164,6 +174,8 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
+    # Shift origin to hinge edge (pivot for revolute joint)
+    set_origin_keep_visual(obj, 0.1875, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── left_drawer_handle ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(-0.4551, 0.2925, 0.7))
