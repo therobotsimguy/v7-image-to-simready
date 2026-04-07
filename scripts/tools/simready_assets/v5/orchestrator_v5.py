@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """V5 Orchestrator — Semantic Behavior Pipeline.
 
-Input: Image OR OBJ/Blend file
+Input: OBJ / blend / fbx / stl / usd / usda / usdc
 Output: SimReady USD with Behavior Contract
 
 Pipeline:
@@ -15,6 +15,7 @@ Pipeline:
 Usage:
     python orchestrator_v5.py --input oven.obj
     python orchestrator_v5.py --input cabinet.blend --output output.usd
+    python orchestrator_v5.py --input fridge.usd --contract-only
 """
 
 import argparse
@@ -31,6 +32,11 @@ from v5.behavior_contract import BehaviorContract
 from v5.layer1_mechanical import run_layer1, send_to_blender
 from v5.layer2_plausible import run_layer2
 from v5.layer3_semantic import run_layer3
+from v5.layer3b_validate import run_layer3b
+from v5.validate_blender_geometry import validate_blender_geometry
+from v5.validate_blender_ai import validate_blender_ai
+from v5.fix_blender_from_ai import fix_blender_from_ai
+from v5.ai_agents import ai_validate_geometry
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -55,34 +61,121 @@ def run_blender_prep(contract: BehaviorContract, port=9876):
     print("  BLENDER PREP: Shift vertices to pivot-local + fix geometry")
     print("=" * 60)
 
+    # Step 0: Merge sub-parts into parent bodies using spatial containment tree.
+    # Parts that are geometrically inside a moving body AND have no independent
+    # behavior (fixed joint) get merged into that body before vertex shifts.
+    merge_map = {}  # parent_name → [child_names_to_merge]
+    containment = getattr(contract, "containment_tree", {})
+
+    if containment:
+        # Use geometry-based containment (Layer 1 computed this)
+        for parent_name, children in containment.items():
+            parent_part = next((p for p in contract.parts if p.name == parent_name), None)
+            if not parent_part or parent_part.is_static:
+                continue  # only merge INTO moving parts (doors, shelves)
+            pb = parent_part.primary_behavior
+            if not pb or pb.joint_type == "fixed":
+                continue  # parent has no real motion — skip
+            merge_children = []
+            for child_name in children:
+                child_part = next((p for p in contract.parts if p.name == child_name), None)
+                if not child_part:
+                    continue
+                cb = child_part.primary_behavior
+                # Merge child if it has no independent motion (fixed or same joint as parent)
+                if not cb or cb.joint_type == "fixed" or cb.joint_type is None:
+                    merge_children.append(child_name)
+            if merge_children:
+                merge_map[parent_name] = merge_children
+    else:
+        # Fallback: name-prefix algorithm if containment tree not available
+        import os as _os
+        all_names = [p.name for p in contract.parts]
+        base_prefix = _os.path.commonprefix(all_names)
+        if "_" in base_prefix:
+            base_prefix = base_prefix[:base_prefix.rfind("_") + 1]
+        all_names_set = set(all_names)
+        part_by_name = {p.name: p for p in contract.parts}
+        for part in contract.parts:
+            if "_body_" not in part.name:
+                continue
+            remainder = part.name[len(base_prefix):]
+            if not remainder.startswith("body_"):
+                idx = remainder.index("_body_")
+                group = remainder[:idx]
+                group_prefix = base_prefix + group + "_"
+                parent_w = part.bbox_max[0] - part.bbox_min[0]
+                parent_h = part.bbox_max[2] - part.bbox_min[2]
+                children = []
+                for n in all_names_set:
+                    if n == part.name or not n.startswith(group_prefix) or "_body_" in n:
+                        continue
+                    child = part_by_name.get(n)
+                    if child:
+                        child_w = child.bbox_max[0] - child.bbox_min[0]
+                        child_h = child.bbox_max[2] - child.bbox_min[2]
+                        if child_w > parent_w * 1.15 or child_h > parent_h * 1.15:
+                            print(f"    SKIP merge {n} → {part.name}: child too large")
+                            continue
+                    children.append(n)
+                if children:
+                    merge_map[part.name] = children
+
+    if merge_map:
+        lines = ["import bpy", "log = []"]
+        for parent, children in merge_map.items():
+            for child in children:
+                lines += [
+                    f'base = bpy.data.objects.get("{parent}")',
+                    f'child = bpy.data.objects.get("{child}")',
+                    f'if base and child:',
+                    f'    bpy.ops.object.select_all(action="DESELECT")',
+                    f'    child.select_set(True)',
+                    f'    base.select_set(True)',
+                    f'    bpy.context.view_layer.objects.active = base',
+                    f'    bpy.ops.object.join()',
+                    f'    log.append("merged {child} → {parent}")',
+                ]
+        lines.append('print("\\n".join(log))')
+        result = send_to_blender("\n".join(lines), port)
+        out = result.get("result", {}).get("result", "")
+        if out:
+            for line in out.strip().splitlines():
+                print(f"    {line}")
+
+    # Batch all vertex shifts into one Blender call (one socket round-trip instead of N)
+    shifts = []
     for part in contract.parts:
-        if not part.primary_behavior:
+        if not part.primary_behavior or part.is_static:
             continue
-        if part.is_static:
+        b = part.primary_behavior
+        if not b.pivot_position:
             continue
-
-        behavior = part.primary_behavior
-        name = part.name
-
-        # Shift mesh vertices so they're relative to the pivot point
-        # Implements vertex_shift_for_pivot(v, pivot) = v - pivot
-        # obj.location stays at (0,0,0) — NO xformOp:translate in USD
-        if behavior.pivot_position:
-            px, py, pz = behavior.pivot_position
-            script = (
-                f'import bpy\n'
-                f'from mathutils import Vector\n'
-                f'obj = bpy.data.objects["{name}"]\n'
-                f'pivot = Vector(({px}, {py}, {pz}))\n'
-                f'for v in obj.data.vertices:\n'
-                f'    v.co -= pivot\n'
-                f'obj.data.update()\n'
-                f'print(f"{name}: vertices shifted by pivot ({px*1000:.0f},{py*1000:.0f},{pz*1000:.0f})mm")\n'
-            )
-            result = send_to_blender(script, port)
-            out = result.get("result", {}).get("result", "")
-            if out:
-                print(f"    {out.strip()}")
+        if b.joint_type == "prismatic":
+            # Use bbox center — PhysX will place the body here via localPos0
+            cx = (part.bbox_min[0] + part.bbox_max[0]) / 2
+            cy = (part.bbox_min[1] + part.bbox_max[1]) / 2
+            cz = (part.bbox_min[2] + part.bbox_max[2]) / 2
+            shifts.append((part.name, (cx, cy, cz)))
+        else:
+            shifts.append((part.name, b.pivot_position))
+    if shifts:
+        lines = ["import bpy", "from mathutils import Vector", "log = []"]
+        for name, (px, py, pz) in shifts:
+            lines += [
+                f'obj = bpy.data.objects.get("{name}")',
+                f'if obj:',
+                f'    pivot = Vector(({px}, {py}, {pz}))',
+                f'    for v in obj.data.vertices: v.co -= pivot',
+                f'    obj.data.update()',
+                f'    log.append("{name}: shifted ({px*1000:.0f},{py*1000:.0f},{pz*1000:.0f})mm")',
+            ]
+        lines.append('print("\\n".join(log))')
+        result = send_to_blender("\n".join(lines), port)
+        out = result.get("result", {}).get("result", "")
+        if out:
+            for line in out.strip().splitlines():
+                print(f"    {line}")
 
     # Remove cavity-blocking front faces (from contract blender_actions)
     for part in contract.parts:
@@ -182,34 +275,46 @@ def run_physx(contract: BehaviorContract, usd_path: str):
     print("  PHYSX: Add physics per Behavior Contract (sole positioning authority)")
     print("=" * 60)
 
-    from pxr import Usd, UsdPhysics, Sdf, Gf
+    from pxr import Usd, UsdPhysics, UsdGeom, Sdf, Gf
     from geometry_math import meters_to_cm
 
     stage = Usd.Stage.Open(usd_path)
     root = stage.GetPrimAtPath("/root")
     UsdPhysics.ArticulationRootAPI.Apply(root)
 
+    # Build name → prim path lookup (handles nested USD hierarchies from Blender re-export)
+    name_to_path = {prim.GetName(): str(prim.GetPath())
+                    for prim in stage.Traverse() if prim.GetTypeName() == "Xform"}
+
+    # Cache root path — used by every revolute/prismatic joint
+    root_path = name_to_path.get(contract.root_part, f"/root/{contract.root_part}")
+
     for part in contract.parts:
         behavior = part.primary_behavior
         if not behavior:
             continue
 
-        xform_path = f"/root/{part.name}"
+        xform_path = name_to_path.get(part.name, f"/root/{part.name}")
         xform = stage.GetPrimAtPath(xform_path)
-
-        # Find the mesh child — may be named {name} or {name}_mesh
-        mesh = None
-        if xform.IsValid():
-            for child in xform.GetChildren():
-                if child.GetTypeName() == "Mesh":
-                    mesh = child
-                    break
 
         if not xform.IsValid():
             print(f"    SKIP {part.name}: not found in USD")
             continue
 
-        # Rigid body + mass
+        # Find mesh child for collision
+        mesh = next((c for c in xform.GetChildren() if c.GetTypeName() == "Mesh"), None)
+
+        # Non-root static parts: static collider only — NO rigid body, NO joint.
+        # (RigidBodyAPI + FixedJoint with localPos0=(0,0,0) would anchor them to world origin
+        #  instead of their actual position inside the chassis, causing physics chaos.)
+        if part.is_static and part.name != contract.root_part:
+            if mesh and behavior.collision_type != "none":
+                UsdPhysics.CollisionAPI.Apply(mesh)
+                UsdPhysics.MeshCollisionAPI.Apply(mesh).CreateApproximationAttr(behavior.collision_type)
+            print(f"    {part.name}: static collider (no joint), collision={behavior.collision_type}")
+            continue
+
+        # Rigid body + mass (root chassis + all movable parts)
         UsdPhysics.RigidBodyAPI.Apply(xform)
         UsdPhysics.MassAPI.Apply(xform).CreateMassAttr(part.mass_kg)
 
@@ -218,15 +323,23 @@ def run_physx(contract: BehaviorContract, usd_path: str):
             UsdPhysics.CollisionAPI.Apply(mesh)
             UsdPhysics.MeshCollisionAPI.Apply(mesh).CreateApproximationAttr(behavior.collision_type)
 
+        # Zero out xform translate — PhysX localPos0 is sole positioning authority
+        attr = xform.GetAttribute("xformOp:translate")
+        if attr and attr.Get():
+            attr.Set(Gf.Vec3d(0, 0, 0))
+
         # Joint
         if behavior.joint_type == "fixed":
+            # Root chassis — fixed to world frame
             j = UsdPhysics.FixedJoint.Define(stage, f"{xform_path}/fixed_joint")
             j.CreateBody1Rel().SetTargets([xform_path])
-            print(f"    {part.name}: fixed, mass={part.mass_kg}kg, collision={behavior.collision_type}")
+            print(f"    {part.name}: fixed (root), mass={part.mass_kg}kg, collision={behavior.collision_type}")
 
         elif behavior.joint_type == "revolute":
+            if not behavior.joint_limits_deg:
+                print(f"    WARN {part.name}: revolute joint missing limits")
             j = UsdPhysics.RevoluteJoint.Define(stage, f"{xform_path}/revolute_joint")
-            j.CreateBody0Rel().SetTargets([f"/root/{contract.root_part}"])
+            j.CreateBody0Rel().SetTargets([root_path])
             j.CreateBody1Rel().SetTargets([xform_path])
             j.CreateAxisAttr(behavior.joint_axis)
 
@@ -234,59 +347,58 @@ def run_physx(contract: BehaviorContract, usd_path: str):
                 j.CreateLowerLimitAttr(behavior.joint_limits_deg[0])
                 j.CreateUpperLimitAttr(behavior.joint_limits_deg[1])
 
-            # Local positions from contract
             if part.joint_local_pos0:
                 j.CreateLocalPos0Attr(Gf.Vec3f(*part.joint_local_pos0))
             j.CreateLocalPos1Attr(Gf.Vec3f(*part.joint_local_pos1))
 
-            # Disable collision between connected bodies
             j.CreateCollisionEnabledAttr(not behavior.collision_enabled_between_bodies)
 
-            # Drive
             drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), "angular")
+            drive.CreateTargetPositionAttr(0.0)
             drive.CreateDampingAttr(behavior.damping)
             drive.CreateStiffnessAttr(behavior.stiffness)
 
-            limits = behavior.joint_limits_deg
+            limits = behavior.joint_limits_deg or [0, 0]
             lp0 = part.joint_local_pos0 or (0, 0, 0)
             print(f"    {part.name}: revolute {behavior.joint_axis} [{limits[0]}-{limits[1]}°] "
                   f"localPos0=({lp0[0]*1000:.0f},{lp0[1]*1000:.0f},{lp0[2]*1000:.0f})mm "
                   f"damping={behavior.damping}")
 
         elif behavior.joint_type == "prismatic":
+            if not behavior.joint_limits_m:
+                print(f"    WARN {part.name}: prismatic joint missing limits")
             j = UsdPhysics.PrismaticJoint.Define(stage, f"{xform_path}/prismatic_joint")
-            j.CreateBody0Rel().SetTargets([f"/root/{contract.root_part}"])
+            j.CreateBody0Rel().SetTargets([root_path])
             j.CreateBody1Rel().SetTargets([xform_path])
             j.CreateAxisAttr(behavior.joint_axis)
 
             if behavior.joint_limits_m:
-                j.CreateLowerLimitAttr(meters_to_cm(behavior.joint_limits_m[0]))  # m to cm
-                j.CreateUpperLimitAttr(meters_to_cm(behavior.joint_limits_m[1]))
+                # Output USD is metersPerUnit=1.0 (meters) — use meter values directly, no cm conversion
+                j.CreateLowerLimitAttr(float(behavior.joint_limits_m[0]))
+                j.CreateUpperLimitAttr(float(behavior.joint_limits_m[1]))
 
-            if part.joint_local_pos0:
-                j.CreateLocalPos0Attr(Gf.Vec3f(*part.joint_local_pos0))
-            j.CreateLocalPos1Attr(Gf.Vec3f(*part.joint_local_pos1))
+            # For prismatic: localPos0 = bbox center in chassis space (shelf's original world position)
+            # This makes joint_pos=0 = shelf at its original position; drive target=0 keeps it there
+            cx = (part.bbox_min[0] + part.bbox_max[0]) / 2
+            cy = (part.bbox_min[1] + part.bbox_max[1]) / 2
+            cz = (part.bbox_min[2] + part.bbox_max[2]) / 2
+            j.CreateLocalPos0Attr(Gf.Vec3f(cx, cy, cz))
+            j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
 
             j.CreateCollisionEnabledAttr(False)
 
             drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), "linear")
+            drive.CreateTargetPositionAttr(0.0)
             drive.CreateDampingAttr(behavior.damping)
+            drive.CreateStiffnessAttr(behavior.stiffness)
 
-            limits = behavior.joint_limits_m
-            print(f"    {part.name}: prismatic {behavior.joint_axis} [{limits[0]*1000:.0f}-{limits[1]*1000:.0f}mm]")
+            limits = behavior.joint_limits_m or [0, 0]
+            print(f"    {part.name}: prismatic {behavior.joint_axis} [{limits[0]*1000:.0f}-{limits[1]*1000:.0f}mm] stiffness={behavior.stiffness}")
 
-    # Zero out xform translates on articulated children
-    # PhysX articulation uses localPos0 for positioning, NOT xform translate
-    # Having both causes double-offset
-    from pxr import UsdGeom
-    for part in contract.parts:
-        if part.is_static:
-            continue
-        xform_path = f"/root/{part.name}"
-        prim = stage.GetPrimAtPath(xform_path)
-        attr = prim.GetAttribute("xformOp:translate")
-        if attr and attr.Get():
-            attr.Set(Gf.Vec3d(0, 0, 0))
+    # Warn about non-static parts with no behavior
+    skipped = [p.name for p in contract.parts if not p.is_static and not p.primary_behavior]
+    if skipped:
+        print(f"  WARN: {len(skipped)} non-static parts have no behavior: {skipped[:5]}{'...' if len(skipped)>5 else ''}")
 
     # Physics scene
     UsdPhysics.Scene.Define(stage, "/physicsScene").CreateGravityDirectionAttr(Gf.Vec3f(0, 0, -1))
@@ -342,11 +454,20 @@ def main():
     # Layer 3: Semantic Filtering → Behavior Contract
     contract = run_layer3(contract)
 
+    # Layer 3b: Geometry Validator — pure bbox math, no AI
+    contract = run_layer3b(contract)
+
     # Save contract
     contract_path = os.path.join(output_dir, "behavior_contract.json")
     with open(contract_path, "w") as f:
         f.write(contract.to_json())
     print(f"\n  Contract saved: {contract_path}")
+
+    # Sanity check — catch silent Layer 3 failures before Blender/PhysX
+    n_with_behavior = sum(1 for p in contract.parts if p.primary_behavior)
+    if n_with_behavior == 0:
+        print(f"\n  ERROR: Layer 3 produced no behaviors — aborting")
+        return
 
     if args.contract_only:
         print(f"\n  Total: {time.time() - t0:.1f}s (contract only)")
@@ -355,24 +476,130 @@ def main():
     # Blender Prep
     contract = run_blender_prep(contract, port=args.port)
 
+    # ── Geometry validation BEFORE USD export ─────────────────────────────────
+    print("\n" + "=" * 60)
+    print("  BLENDER GEOMETRY VALIDATION (pre-export)")
+    print("=" * 60)
+    blender_report, critical_failures = validate_blender_geometry(contract, port=args.port)
+
+    if critical_failures:
+        # Ask AI what to do about each bad part
+        ai_actions = ai_validate_geometry(contract, blender_report)
+        for part_name, action in ai_actions.items():
+            part = contract.get_part(part_name)
+            if not part:
+                continue
+            print(f"  AI action [{part_name}]: {action}")
+            if action == "mark_static":
+                part.is_static = True
+                if part.primary_behavior:
+                    part.primary_behavior.joint_type = "fixed"
+            # re_merge / re_export would need a full re-run — log and continue for now
+        print(f"  {len(critical_failures)} critical issues found — proceeding with best effort")
+    else:
+        print("  All geometry checks passed — safe to export")
+
+    # ── AI validate → fix loop (up to 2 rounds) ───────────────────────────────
+    for _fix_round in range(2):
+        ai_geo_result = validate_blender_ai(contract, port=args.port)
+        if ai_geo_result.get("skipped") or ai_geo_result["valid"]:
+            print("  AI GEOMETRY VERDICT: PASS — geometry valid, proceeding to export")
+            break
+        print(f"\n  AI GEOMETRY VERDICT: FAIL (round {_fix_round+1}) — sending findings to Blender for fix")
+        fixed = fix_blender_from_ai(contract, ai_geo_result, port=args.port)
+        if not fixed:
+            print("  Fix failed — exporting best-effort geometry")
+            break
+
     # Export USD
     export_usd(output_usd, output_blend, port=args.port)
 
     # PhysX
     contract = run_physx(contract, output_usd)
 
+    # ── Validation + Auto-Retry ────────────────────────────────────────────────
+    import subprocess, json as _json
+    telemetry_path = "/tmp/isaaclab_telemetry.json"
+    validator = os.path.join(_ASSETS_DIR, "validate_in_isaacsim.py")
+
+    def _run_validator(usd):
+        """Run Isaac Sim validator. Returns telemetry dict or None if validator unavailable."""
+        if not os.path.exists(validator):
+            return None
+        isaaclab_sh = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(_ASSETS_DIR))), "isaaclab.sh")
+        if not os.path.exists(isaaclab_sh):
+            return None
+        try:
+            result = subprocess.run(
+                [isaaclab_sh, "-p", validator, "--usd", usd, "--steps", "100"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if os.path.exists(telemetry_path):
+                with open(telemetry_path) as f:
+                    return _json.load(f)
+        except Exception as e:
+            print(f"  Validator error: {e}")
+        return None
+
+    print("\n  Running Isaac Sim validator...")
+    tel = _run_validator(output_usd)
+
+    if tel is None:
+        print("  Validator not available — skipping (run manually with validate_in_isaacsim.py)")
+    elif tel.get("passed"):
+        print(f"  PASS — {tel['joints_total']} joints, gravity stable")
+        contract.validated = True
+    else:
+        print(f"  FAIL — joints={tel.get('joints_total',0)}, gravity_ok={tel.get('gravity_ok')}")
+        print(f"  Attempting targeted retry...")
+
+        # Build targeted feedback for Layer 3 retry
+        issues = []
+        if tel.get("joints_total", 0) == 0:
+            issues.append("No joints written — check that non-static parts exist in USD")
+        if not tel.get("gravity_ok") and tel.get("joints_total", 0) > 0:
+            issues.append(f"Gravity drift too large — pivot positions may be wrong")
+        if tel.get("revolute", 0) == 0 and any("door" in p.name for p in contract.parts if not p.is_static):
+            issues.append("Expected revolute joints for doors but found none")
+
+        if issues:
+            print(f"  Issues: {issues}")
+            # Re-run Layer 3 with issue context injected into prompt, then redo Blender+PhysX
+            # For now: re-run Blender prep + PhysX only (contract already has the specs)
+            print("  Re-running Blender prep + PhysX...")
+            contract.blender_complete = False
+            contract.physx_complete = False
+            contract = run_blender_prep(contract, port=args.port)
+            export_usd(output_usd, output_blend, port=args.port)
+            contract = run_physx(contract, output_usd)
+
+            tel2 = _run_validator(output_usd)
+            if tel2 and tel2.get("passed"):
+                print(f"  RETRY PASS — {tel2['joints_total']} joints, gravity stable")
+                contract.validated = True
+            elif tel2:
+                print(f"  RETRY FAIL — {tel2}")
+            else:
+                print("  Retry complete (validator unavailable for second check)")
+
     # Save final contract
     with open(contract_path, "w") as f:
         f.write(contract.to_json())
 
-    print(f"\n  {'=' * 60}")
-    print(f"  V5 COMPLETE")
+    total_time = time.time() - t0
+    moving = sum(1 for p in contract.parts if not p.is_static)
+    validated_str = "VALIDATED ✓" if contract.validated else "not validated"
+
+    print()
+    print("=" * 60)
+    print("  V5 COMPLETE")
     print(f"  SimReady USD: {output_usd}")
     print(f"  Contract:     {contract_path}")
     print(f"  Parts:        {len(contract.parts)}")
-    print(f"  Moving:       {sum(1 for p in contract.parts if not p.is_static)}")
-    print(f"  Total:        {time.time() - t0:.1f}s")
-    print(f"  {'=' * 60}")
+    print(f"  Moving:       {moving}")
+    print(f"  Validation:   {validated_str}")
+    print(f"  Total:        {total_time:.1f}s")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

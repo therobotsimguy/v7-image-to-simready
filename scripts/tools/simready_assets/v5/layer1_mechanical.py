@@ -15,6 +15,8 @@ import os
 import sys
 import socket
 
+from pxr import Usd, UsdGeom
+
 _DIR = os.path.dirname(os.path.abspath(__file__))
 _ASSETS_DIR = os.path.dirname(_DIR)
 sys.path.insert(0, _ASSETS_DIR)
@@ -75,7 +77,13 @@ print(f"Loaded {{len([o for o in bpy.data.objects if o.type=='MESH'])}} meshes")
 
 
 def load_usd_in_blender(usd_path, port=9876):
-    """Load a USD file into Blender. USD is Z-up like Blender — no rotation correction needed."""
+    """Load a USD file into Blender, applying metersPerUnit scale correction."""
+    stage = Usd.Stage.Open(usd_path)
+    meters_per_unit = UsdGeom.GetStageMetersPerUnit(stage)
+    # Blender treats imported values as meters — scale by metersPerUnit to correct
+    scale = float(meters_per_unit)
+    print(f"  USD metersPerUnit={meters_per_unit:.4f}, applying scale={scale}")
+
     script = f'''
 import bpy
 
@@ -85,14 +93,13 @@ bpy.ops.object.delete(use_global=False)
 for m in list(bpy.data.meshes): bpy.data.meshes.remove(m)
 for m in list(bpy.data.materials): bpy.data.materials.remove(m)
 
-# Import USD
-bpy.ops.wm.usd_import(filepath="{usd_path}", import_materials=True)
+# Import USD with unit scale correction
+bpy.ops.wm.usd_import(filepath="{usd_path}", import_materials=True, scale={scale})
 
-# Apply any residual transforms
 bpy.ops.object.select_all(action="SELECT")
-bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-print(f"Loaded {{len([o for o in bpy.data.objects if o.type=='MESH'])}} meshes from USD")
+print(f"Loaded {{len([o for o in bpy.data.objects if o.type=='MESH'])}} meshes from USD (scale={scale})")
 '''
     result = send_to_blender(script, port)
     return result
@@ -270,6 +277,49 @@ def run_layer1(source_file, contract=None, port=9876, skip_load=False):
 
         print(f"    {obj['name']}: {obj['vertices']}v, {obj['dims_mm']}mm, "
               f"mass≈{mass}kg, mats={obj['materials']}")
+
+    # ── SPATIAL CONTAINMENT TREE ──────────────────────────────────────────────────
+    # For each pair of parts: if child's centroid is inside parent's bbox AND
+    # child volume < 90% of parent volume → child is spatially inside parent.
+    # This replaces name-pattern merge heuristics with geometry-based grouping.
+    print("  Computing spatial containment tree...")
+    containment: dict = {}
+    part_by_name = {p.name: p for p in contract.parts}
+
+    def _vol(p):
+        return ((p.bbox_max[0]-p.bbox_min[0]) *
+                (p.bbox_max[1]-p.bbox_min[1]) *
+                (p.bbox_max[2]-p.bbox_min[2]))
+
+    for parent in contract.parts:
+        pvol = _vol(parent)
+        if pvol <= 0:
+            continue
+        children = []
+        for child in contract.parts:
+            if child.name == parent.name:
+                continue
+            cvol = _vol(child)
+            if cvol <= 0 or cvol >= pvol * 0.95:
+                continue  # child must be smaller than parent
+            # Check: child centroid inside parent bbox (with 60mm tolerance for protruding parts)
+            cx = (child.bbox_min[0] + child.bbox_max[0]) / 2
+            cy = (child.bbox_min[1] + child.bbox_max[1]) / 2
+            cz = (child.bbox_min[2] + child.bbox_max[2]) / 2
+            tol = 0.06  # 60mm — handles handles that stick out slightly
+            if (parent.bbox_min[0]-tol <= cx <= parent.bbox_max[0]+tol and
+                parent.bbox_min[1]-tol <= cy <= parent.bbox_max[1]+tol and
+                parent.bbox_min[2]-tol <= cz <= parent.bbox_max[2]+tol):
+                children.append(child.name)
+        if children:
+            containment[parent.name] = children
+            parent_part = part_by_name.get(parent.name)
+            if parent_part:
+                parent_part.spatial_children = children
+
+    contract.containment_tree = containment
+    n_relations = sum(len(v) for v in containment.values())
+    print(f"  Containment tree: {len(containment)} parents, {n_relations} child relationships")
 
     contract.layer1_complete = True
     print(f"\n  Layer 1 complete: {len(contract.parts)} parts extracted")

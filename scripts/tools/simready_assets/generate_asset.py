@@ -697,347 +697,303 @@ def build_spec_summary(results, vdata):
     return "\n".join(lines)
 
 
-def run_pipeline(image_path, api_keys, output_usd, output_blend, blender_port=9876):
-    gkey = api_keys["gemini"]["api_key"]
-    ckey = api_keys["anthropic"]["api_key"]
+def apply_physx_to_usd(usd_path, behavior_data, bodies_data):
+    """Path D physics finalizer.
 
-    # ══ PHASE 1: Path A (6 AI agents) ‖ Path B (4 vision models) ═══════
+    Takes V4's just-exported geometry-only USD and stamps PhysX joints onto it
+    based on the behavior + bodies dicts that Path A already produced. No AI,
+    no Blender re-import, no V5. Pure deterministic pxr post-pass.
+
+    For each top-level Xform under the root prim:
+      - Match against `behaviors` by part-name substring (door/drawer/knob/handle).
+      - Unmatched prim → chassis (articulation root, fixed to world).
+      - Doors (rotational) → RevoluteJoint, axis Z, limits [0, 110°].
+      - Drawers (linear) → PrismaticJoint, axis Y, limits [0, 0.85*depth].
+      - Knobs/handles → FixedJoint to their parent door/drawer.
+
+    Pivot resolution:
+      - If the prim already has a non-zero xformOp:translate (V4 set this for
+        doors via set_origin_keep_visual), the mesh verts are already body-local
+        and translate is the pivot in chassis space.
+      - Otherwise (drawers/knobs/handles built at world position with origin at
+        world 0), compute the mesh bbox center as the pivot and shift the mesh
+        points so they become body-local.
+
+    After the pivot is captured, the prim's xformOp:translate is zeroed so PhysX
+    is the sole positioning authority (no double offset).
+    """
+    try:
+        from pxr import Usd, UsdPhysics, UsdGeom, Sdf, Gf
+    except ImportError:
+        print("  Path D physics: pxr not available — run inside an environment with USD installed")
+        return False
+
     print("\n" + "=" * 70)
-    print("  PHASE 1: Path A (6 AI agents) ‖ Path B (4 vision models)")
-    print("           All 10 workers running in parallel")
+    print("  PATH D — PHYSICS FINALIZER (deterministic pxr post-pass)")
     print("=" * 70)
 
-    t0 = time.time()
+    stage = Usd.Stage.Open(usd_path)
+    if not stage:
+        print(f"  ERROR: cannot open {usd_path}")
+        return False
 
-    # ── Path B: Vision Stack (background thread) ────────────────────────
-    vision_result = {}
-
-    def _run_vision():
-        vision_result["data"] = run_vision_stack(image_path)
-
-    vision_thread = threading.Thread(target=_run_vision)
-    vision_thread.start()
-
-    # ── Path A: 6 AI agents ─────────────────────────────────────────────
-    results = {}
-    agents = [
-        ("gemini_type",     call_gemini, gkey, BEST_GEMINI, PROMPTS["gemini_type"]),
-        ("gemini_dims",     call_gemini, gkey, BEST_GEMINI, PROMPTS["gemini_dims"]),
-        ("gemini_materials", call_gemini, gkey, BEST_GEMINI, PROMPTS["gemini_materials"]),
-        ("claude_behavior", call_claude, ckey, BEST_CLAUDE, PROMPTS["claude_behavior"]),
-        ("claude_bodies",   call_claude, ckey, BEST_CLAUDE, PROMPTS["claude_bodies"]),
-        ("claude_geometry", call_claude, ckey, BEST_CLAUDE, PROMPTS["claude_geometry"]),
-    ]
-
-    ai_threads = []
-    for name, func, key, model, prompt in agents:
-        t = threading.Thread(target=run_agent, args=(func, key, model, prompt, image_path, results, name))
-        t.start()
-        ai_threads.append((name, t))
-
-    # Wait for all
-    for name, t in ai_threads:
-        t.join(timeout=120)
-    vision_thread.join(timeout=180)
-
-    phase1_time = time.time() - t0
-
-    # ── Path A status ───────────────────────────────────────────────────
-    print(f"\n  ── Path A: AI Agents ──")
-    all_ok = True
-    for name, _ in ai_threads:
-        r = results.get(name, {})
-        if r.get("error"):
-            print(f"    {name}: ERROR — {r['error']}")
-            all_ok = False
-        elif r.get("parsed"):
-            print(f"    {name}: OK ({len(r['raw'])} chars)")
-        else:
-            print(f"    {name}: PARSE FAILED")
-            print(f"      Raw: {r.get('raw', '')[:200]}")
-            all_ok = False
-
-    # ── Path B status ───────────────────────────────────────────────────
-    vdata = vision_result.get("data", {})
-    print(f"\n  ── Path B: Vision Stack ──")
-    for m, s in vdata.get("model_status", {}).items():
-        print(f"    {m}: {s}")
-    print(f"    Counts: {vdata.get('counts', {})}")
-
-    print(f"\n  Phase 1: {phase1_time:.1f}s (all parallel)")
-
-    if not all_ok:
-        print("  Path A agents failed. Aborting.")
-        return None, results
-
-    # ══ PHASE 2: Path C — AI generates Blender script ══════════════════
-    print("\n" + "=" * 70)
-    print("  PHASE 2: Path C — reconcile + generate Blender script")
-    print("=" * 70)
-
-    t1 = time.time()
-
-    # Build complete spec summary from A + B
-    spec_summary = build_spec_summary(results, vdata)
-
-    # Print what object we're building
-    obj_type = results.get("gemini_type", {}).get("parsed", {}).get("object_type", "unknown")
-    approach = results.get("gemini_type", {}).get("parsed", {}).get("geometry_approach", "unknown")
-    print(f"  Object: {obj_type}")
-    print(f"  Geometry approach: {approach}")
-
-    # ── C → Blender → D race: Gemini and Claude both generate, try each ──
-    behavior = results.get("claude_behavior", {}).get("parsed", {})
-    bodies = results.get("claude_bodies", {}).get("parsed", {})
-    script = None
-
-    from judge import query_blender_scene, audit_structure
-
-    # Pre-compute coordinates for D validation
-    expected_coords = compute_coordinates(results, vdata)
-
-    spec_with_fixes = spec_summary
-
-    full_prompt = SCRIPT_GEN_PROMPT.format(
-        blender_rules=_BLENDER_RULES,
-        spec_data=spec_with_fixes,
-        output_usd=output_usd,
-        output_blend=output_blend,
-    )
-
-    # Both generate full scripts in parallel — try Claude first (better quality),
-    # fall back to Gemini, retry with fixes if needed
-    script_results = {}
-    script_ready = {"gemini": threading.Event(), "claude": threading.Event()}
-
-    def _gen_gemini():
-        try:
-            raw = call_gemini(gkey, BEST_GEMINI, full_prompt, image_path=image_path)
-            script_results["gemini"] = extract_script(raw)
-        except Exception as e:
-            script_results["gemini_error"] = str(e)
-        script_ready["gemini"].set()
-
-    def _gen_claude():
-        try:
-            raw = call_claude(ckey, BEST_CLAUDE, full_prompt, image_path=image_path)
-            script_results["claude"] = extract_script(raw)
-        except Exception as e:
-            script_results["claude_error"] = str(e)
-        script_ready["claude"].set()
-
-    print(f"  Generating scripts: Gemini ‖ Claude (parallel, prefer Claude)...")
-    t_script = time.time()
-    threading.Thread(target=_gen_gemini, daemon=True).start()
-    threading.Thread(target=_gen_claude, daemon=True).start()
-
-    # Try Claude first (higher quality), then Gemini as fallback, then retry
-    candidates = ["claude", "gemini", "claude_retry"]
-    candidates_tried = []
-    winner = None
-    fix_history = ""
-
-    for attempt, candidate in enumerate(candidates, 1):
-        if candidate == "claude":
-            script_ready["claude"].wait(timeout=180)
-            if "claude" not in script_results:
-                print(f"  Claude failed: {script_results.get('claude_error', '?')}")
-                continue
-        elif candidate == "gemini":
-            script_ready["gemini"].wait(timeout=180)
-            if "gemini" not in script_results:
-                print(f"  Gemini failed: {script_results.get('gemini_error', '?')}")
-                continue
-        elif candidate == "claude_retry":
-            if not fix_history:
+    # Find articulation root: prefer /root, else first top-level Xform
+    root = stage.GetPrimAtPath("/root")
+    if not root or not root.IsValid():
+        for p in stage.GetPseudoRoot().GetChildren():
+            if p.GetTypeName() == "Xform":
+                root = p
                 break
-            print(f"  Retrying Claude — targeted fix (scene stays, only broken objects replaced)...")
-            fix_prompt = FIX_PROMPT.format(
-                issues=fix_history,
-                blender_rules=_BLENDER_RULES,
-            )
-            try:
-                raw = call_claude(ckey, BEST_CLAUDE, fix_prompt, image_path=image_path)
-                script_results["claude_retry"] = extract_script(raw)
-            except Exception as e:
-                print(f"  Retry failed: {e}")
-                break
+    if not root or not root.IsValid():
+        print("  ERROR: no root Xform found in USD")
+        return False
 
-        candidates_tried.append(candidate)
-        test_script = script_results[candidate]
-        lines = len(test_script.splitlines())
-        elapsed = time.time() - t_script
+    UsdPhysics.ArticulationRootAPI.Apply(root)
 
-        print(f"\n  ── Testing {candidate} ({lines} lines, {elapsed:.0f}s) ──")
+    behaviors = behavior_data.get("behaviors", []) if behavior_data else []
 
-        # Execute in Blender
-        try:
-            result = send_to_blender(test_script, port=blender_port)
-            if result.get("status") == "error":
-                err = result.get('message', '?')[:500]
-                print(f"  Blender ERROR: {err[:150]}")
-                fix_history = f"Blender execution error in previous script:\n{err}\nFix only the code that caused this error. Do not touch working objects."
-                continue
-            print(f"  Blender: OK")
-        except Exception as e:
-            print(f"  Blender connection error: {e}")
+    def find_behavior(prim_name):
+        # Prefer the part word that appears EARLIEST in the prim name, so e.g.
+        # "Knob_Door_Left" matches "knob" (position 0) instead of "door" (position 5).
+        nl = prim_name.lower()
+        candidates = []
+        for b in behaviors:
+            part_word = (b.get("part", "") or "").lower().strip()
+            if part_word and part_word in nl:
+                candidates.append((nl.find(part_word), b))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: x[0])
+        return candidates[0][1]
+
+    def classify_by_name(prim_name):
+        """Name-based fallback classification when behavior data is missing or
+        uses unexpected keys. Returns one of: 'attachment', 'door', 'drawer',
+        'lid', 'shelf', 'chassis'."""
+        nl = prim_name.lower()
+        if "knob" in nl or "handle" in nl or "pull" in nl:
+            return "attachment"
+        if "door" in nl:
+            return "door"
+        if "drawer" in nl:
+            return "drawer"
+        if "lid" in nl:
+            return "lid"
+        if "shelf" in nl:
+            return "shelf"
+        return "chassis"
+
+    # ── Pass 1: classify, compute pivots, shift verts to body-local ──────
+    parts_info = []  # list of (prim, mesh, behavior, pivot, motion, kind)
+    chassis_candidates = []  # (prim, mesh, bbox_volume, name_score)
+
+    for prim in root.GetChildren():
+        if prim.GetTypeName() != "Xform":
             continue
 
-        # Structural audit
-        scene = query_blender_scene(port=blender_port)
-        if scene and "error" not in scene:
-            passed, issues = audit_structure(scene, behavior, bodies, expected_coords=expected_coords)
-            print(f"  D (structural): {'PASS' if passed else 'FAIL'} — {len(issues)} issues")
-            for iss in issues:
-                print(f"    ✗ {iss}")
+        kind = classify_by_name(prim.GetName())
+        b = find_behavior(prim.GetName())
+        mesh = next((c for c in prim.GetChildren() if c.GetTypeName() == "Mesh"), None)
 
-            if passed:
-                script = test_script
-                winner = candidate
-                print(f"\n  ✓ WINNER: {candidate} (attempt {attempt}, {elapsed:.0f}s)")
-                break
-            else:
-                fix_lines = [f"\n\n## {candidate} structural issues:"]
-                for i, iss in enumerate(issues, 1):
-                    fix_lines.append(f"  {i}. {iss}")
-                fix_history = "\n".join(fix_lines)
+        if mesh is None:
+            continue
+
+        # Determine motion: name-based default, overridden by behavior dict if present.
+        if kind == "door" or kind == "lid":
+            motion = "rotational"
+        elif kind == "drawer":
+            motion = "linear"
+        elif kind == "attachment":
+            motion = "none"
         else:
-            print(f"  Could not inspect scene")
+            motion = "none"
+        if b:
+            b_motion = (b.get("motion", "") or "").lower().strip()
+            if b_motion:
+                motion = b_motion
 
-    total_script_time = time.time() - t_script
+        if kind == "chassis":
+            # Score chassis-likeness by name. Compute bbox volume too.
+            nl = prim.GetName().lower()
+            name_score = 0
+            for kw in ("main_frame", "main", "frame", "carcass", "chassis", "body", "cabinet"):
+                if kw in nl:
+                    name_score = 10 if kw in ("main_frame", "carcass", "chassis") else 5
+                    break
+            pts = mesh.GetAttribute("points").Get()
+            if pts and len(pts) > 0:
+                xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; zs = [p[2] for p in pts]
+                vol = (max(xs)-min(xs)) * (max(ys)-min(ys)) * (max(zs)-min(zs))
+            else:
+                vol = 0.0
+            chassis_candidates.append((prim, mesh, vol, name_score))
+            continue
 
-    if not script:
-        # Use best available even if D didn't pass
-        for fallback in ["claude", "gemini", "claude_retry"]:
-            if fallback in script_results:
-                script = script_results[fallback]
-                winner = f"{fallback} (fallback)"
-                print(f"\n  No script passed D — using {fallback} as fallback")
-                break
+        # Pivot: prefer existing translate, else compute from mesh bbox + shift
+        translate_attr = prim.GetAttribute("xformOp:translate")
+        existing_t = translate_attr.Get() if translate_attr and translate_attr.HasValue() else None
 
-    if not script:
-        print(f"  All script generation failed")
-        return None, results
+        if existing_t and any(abs(v) > 1e-9 for v in (existing_t[0], existing_t[1], existing_t[2])):
+            pivot = Gf.Vec3f(float(existing_t[0]), float(existing_t[1]), float(existing_t[2]))
+        else:
+            pts = mesh.GetAttribute("points").Get()
+            if not pts or len(pts) == 0:
+                continue
+            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]; zs = [p[2] for p in pts]
+            cx = (min(xs) + max(xs)) / 2.0
+            cy = (min(ys) + max(ys)) / 2.0
+            cz = (min(zs) + max(zs)) / 2.0
+            pivot = Gf.Vec3f(cx, cy, cz)
+            new_pts = [(p[0] - cx, p[1] - cy, p[2] - cz) for p in pts]
+            mesh.GetAttribute("points").Set(new_pts)
 
-    print(f"  Script gen total: {total_script_time:.1f}s")
+        parts_info.append((prim, mesh, b, pivot, motion, kind))
 
-    phase2_time = time.time() - t1
-    print(f"\n  Phase 2 total: {phase2_time:.1f}s")
-    print(f"  Total: {phase1_time + phase2_time:.1f}s")
+    # Pick the chassis: prefer name-scored candidates, then largest bbox volume.
+    if not chassis_candidates:
+        print("  ERROR: no chassis prim found (every prim looked like a moving part)")
+        return False
+    chassis_candidates.sort(key=lambda x: (x[3], x[2]), reverse=True)
+    chassis_prim, chassis_mesh, _, _ = chassis_candidates[0]
 
-    return script, {
-        "object_type": obj_type,
-        "approach": approach,
-        "vision": {k: v for k, v in vdata.items() if k != "components"},
-        "agents": {k: {"raw": v["raw"]} for k, v in results.items()},
-    }
+    chassis_path = str(chassis_prim.GetPath())
+    print(f"  Chassis: {chassis_path}")
 
+    # ── Chassis: rigid body + collision + fixed-to-world ─────────────────
+    UsdPhysics.RigidBodyAPI.Apply(chassis_prim)
+    UsdPhysics.MassAPI.Apply(chassis_prim).CreateMassAttr(30.0)
+    if chassis_mesh:
+        UsdPhysics.CollisionAPI.Apply(chassis_mesh)
+        UsdPhysics.MeshCollisionAPI.Apply(chassis_mesh).CreateApproximationAttr("convexDecomposition")
+    fj = UsdPhysics.FixedJoint.Define(stage, f"{chassis_path}/fixed_to_world")
+    fj.CreateBody1Rel().SetTargets([chassis_path])
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════════
+    # Drop any other chassis_candidates that lost the contest — treat them as
+    # static decoration merged into the chassis (no rigid body, just collision).
+    for prim, mesh, _, _ in chassis_candidates[1:]:
+        if mesh:
+            UsdPhysics.CollisionAPI.Apply(mesh)
+            UsdPhysics.MeshCollisionAPI.Apply(mesh).CreateApproximationAttr("convexHull")
+        print(f"    {prim.GetName()}: extra chassis candidate → static collider only")
 
-def main():
-    parser = argparse.ArgumentParser(description="Multi-Agent Asset Generator")
-    parser.add_argument("--image", required=True, help="Path to reference image")
-    parser.add_argument("--output", default=None, help="Output USD path")
-    parser.add_argument("--blender-port", type=int, default=9876, help="Blender MCP port")
-    parser.add_argument("--no-execute", action="store_true", help="Generate script only")
-    args = parser.parse_args()
+    # ── Pass 2: pivot lookup for parent matching ─────────────────────────
+    pivot_lookup = {prim.GetName(): pivot for prim, _, _, pivot, _, _ in parts_info}
+    name_to_path = {prim.GetName(): str(prim.GetPath()) for prim, _, _, _, _, _ in parts_info}
 
-    image_path = args.image
-    if not os.path.isabs(image_path):
-        image_path = os.path.join(_DIR, image_path)
-    if not os.path.exists(image_path):
-        print(f"ERROR: Image not found: {image_path}")
-        sys.exit(1)
+    # ── Pass 3: write physics for moving parts ───────────────────────────
+    joint_count = 0
 
-    obj_name = os.path.splitext(os.path.basename(image_path))[0]
-    output_dir = os.path.join(_DIR, obj_name)
-    os.makedirs(output_dir, exist_ok=True)
-    output_usd = args.output or os.path.join(output_dir, f"{obj_name}_asset.usd")
-    output_blend = os.path.join(output_dir, f"{obj_name}.blend")
+    for prim, mesh, behavior, pivot, motion, kind in parts_info:
+        path = str(prim.GetPath())
+        name = prim.GetName()
+        name_l = name.lower()
+        part_word = (behavior.get("part", "") or "").lower() if behavior else ""
 
-    print()
-    print("=" * 70)
-    print("  MULTI-AGENT ASSET GENERATOR")
-    print(f"  Image:    {image_path}")
-    print(f"  Output:   {output_usd}")
-    print(f"  Path A:   {BEST_GEMINI} (×3) + {BEST_CLAUDE} (×3)")
-    print(f"  Path B:   DINO + SAM3 + DepthPro + DepthAnything3")
-    print(f"  Path C:   {BEST_CLAUDE} (Blender script generation)")
-    print(f"  Path D:   Gemini + Claude (judge) + structural audit")
-    print(f"  Workers:  10 parallel + script gen + judge (max 3 retries)")
-    print("=" * 70)
+        axis_str = (behavior.get("axis", "") or "").upper() if behavior else ""
+        if axis_str not in ("X", "Y", "Z"):
+            axis_str = "Z" if motion == "rotational" else "Y"
 
-    api_keys = load_api_keys()
-    t0 = time.time()
+        # Zero out translate — PhysX localPos0 is the sole positioning authority.
+        ta = prim.GetAttribute("xformOp:translate")
+        if ta:
+            ta.Set(Gf.Vec3d(0, 0, 0))
 
-    if args.no_execute:
-        # Skip execution — just generate script
-        script, log = run_pipeline(image_path, api_keys, output_usd, output_blend,
-                                    blender_port=args.blender_port)
-        if script:
-            script_path = os.path.join(output_dir, "final_blender_script.py")
-            with open(script_path, "w") as f:
-                f.write(script)
-            print(f"\n  Script saved: {script_path}")
-        return
+        # Mass per kind (sane defaults)
+        is_attachment = (kind == "attachment")
+        if is_attachment:
+            mass_kg = 0.1
+        elif kind == "drawer":
+            mass_kg = 3.0
+        elif kind in ("door", "lid"):
+            mass_kg = 5.0
+        else:
+            mass_kg = 1.0
 
-    script, log = run_pipeline(image_path, api_keys, output_usd, output_blend,
-                                blender_port=args.blender_port)
-    if not script:
-        print("\n  Pipeline failed.")
-        return
+        UsdPhysics.RigidBodyAPI.Apply(prim)
+        UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(mass_kg)
+        UsdPhysics.CollisionAPI.Apply(mesh)
+        UsdPhysics.MeshCollisionAPI.Apply(mesh).CreateApproximationAttr("convexHull")
 
-    # Save outputs
-    def _json_default(o):
-        import numpy as np
-        if isinstance(o, (np.bool_,)):
-            return bool(o)
-        if isinstance(o, (np.integer,)):
-            return int(o)
-        if isinstance(o, (np.floating,)):
-            return float(o)
-        if isinstance(o, (np.ndarray,)):
-            return o.tolist()
-        raise TypeError(f"Object of type {type(o)} is not JSON serializable")
+        if is_attachment:
+            # Find parent door/drawer by name match. Handles both
+            # "Knob_Door_Left" (prefix) and "Right_Door_Knob" (suffix).
+            parent_path = chassis_path
+            parent_pivot = Gf.Vec3f(0, 0, 0)
+            best_match = None
+            best_overlap = 0
+            for other_name, other_path in name_to_path.items():
+                if other_name == name:
+                    continue
+                ol = other_name.lower()
+                # Skip other attachments
+                if "knob" in ol or "handle" in ol or "pull" in ol:
+                    continue
+                if "door" not in ol and "drawer" not in ol and "lid" not in ol:
+                    continue
+                # Score by how many tokens of `other_name` appear in our name
+                tokens = [t for t in ol.replace("-", "_").split("_") if t]
+                overlap = sum(1 for t in tokens if t in name_l)
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_match = other_name
+            if best_match:
+                parent_path = name_to_path[best_match]
+                parent_pivot = pivot_lookup[best_match]
 
-    with open(os.path.join(output_dir, "spec.json"), "w") as f:
-        json.dump({k: v for k, v in log.items() if k != "agents"}, f, indent=2, default=_json_default)
-    script_path = os.path.join(output_dir, "final_blender_script.py")
-    with open(script_path, "w") as f:
-        f.write(script)
+            local0 = Gf.Vec3f(pivot[0] - parent_pivot[0],
+                              pivot[1] - parent_pivot[1],
+                              pivot[2] - parent_pivot[2])
+            j = UsdPhysics.FixedJoint.Define(stage, f"{path}/fixed_joint")
+            j.CreateBody0Rel().SetTargets([parent_path])
+            j.CreateBody1Rel().SetTargets([path])
+            j.CreateLocalPos0Attr(local0)
+            j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+            joint_count += 1
+            print(f"    {name}: fixed → {parent_path.split('/')[-1]}")
+            continue
 
-    # Final beauty screenshot (3/4 view)
-    try:
-        time.sleep(1)
-        setup = ('import bpy, math\n'
-                 'for a in bpy.context.screen.areas:\n'
-                 '    if a.type == "VIEW_3D":\n'
-                 '        for s in a.spaces:\n'
-                 '            if s.type == "VIEW_3D": s.shading.type = "MATERIAL"\n'
-                 '        for r in a.regions:\n'
-                 '            if r.type == "WINDOW":\n'
-                 '                with bpy.context.temp_override(area=a, region=r):\n'
-                 '                    bpy.ops.view3d.view_axis(type="BACK")\n'
-                 '                    bpy.ops.view3d.view_all()\n'
-                 '                    bpy.ops.view3d.view_orbit(angle=math.radians(15), type="ORBITDOWN")\n'
-                 '                    bpy.ops.view3d.view_orbit(angle=math.radians(-20), type="ORBITRIGHT")\n'
-                 '                break\n'
-                 'bpy.ops.object.select_all(action="DESELECT")\n')
-        send_to_blender(setup, port=args.blender_port)
-        time.sleep(1)
-        ss = f"/tmp/{obj_name}_vp.png"
-        if blender_screenshot(ss, port=args.blender_port):
-            import shutil
-            shutil.copy(ss, os.path.join(output_dir, "viewport.png"))
-            print(f"  Final screenshot saved")
-    except:
-        pass
+        if motion == "rotational":
+            j = UsdPhysics.RevoluteJoint.Define(stage, f"{path}/revolute_joint")
+            j.CreateBody0Rel().SetTargets([chassis_path])
+            j.CreateBody1Rel().SetTargets([path])
+            j.CreateAxisAttr(axis_str)
+            j.CreateLowerLimitAttr(0.0)
+            j.CreateUpperLimitAttr(110.0)
+            j.CreateLocalPos0Attr(pivot)
+            j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+            j.CreateCollisionEnabledAttr(False)
+            drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), "angular")
+            drive.CreateTargetPositionAttr(0.0)
+            drive.CreateDampingAttr(50.0)
+            drive.CreateStiffnessAttr(0.0)
+            joint_count += 1
+            print(f"    {name}: revolute axis={axis_str} pivot=({pivot[0]:.3f},{pivot[1]:.3f},{pivot[2]:.3f}) limits=[0,110°]")
 
-    print(f"\n  Total: {time.time()-t0:.1f}s")
+        elif motion == "linear":
+            pts = mesh.GetAttribute("points").Get()
+            if pts:
+                axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis_str]
+                vs = [p[axis_idx] for p in pts]
+                slide = (max(vs) - min(vs)) * 0.85
+            else:
+                slide = 0.3
+            j = UsdPhysics.PrismaticJoint.Define(stage, f"{path}/prismatic_joint")
+            j.CreateBody0Rel().SetTargets([chassis_path])
+            j.CreateBody1Rel().SetTargets([path])
+            j.CreateAxisAttr(axis_str)
+            j.CreateLowerLimitAttr(0.0)
+            j.CreateUpperLimitAttr(float(slide))
+            j.CreateLocalPos0Attr(pivot)
+            j.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+            j.CreateCollisionEnabledAttr(False)
+            drive = UsdPhysics.DriveAPI.Apply(j.GetPrim(), "linear")
+            drive.CreateTargetPositionAttr(0.0)
+            drive.CreateDampingAttr(100.0)
+            drive.CreateStiffnessAttr(0.0)
+            joint_count += 1
+            print(f"    {name}: prismatic axis={axis_str} pivot=({pivot[0]:.3f},{pivot[1]:.3f},{pivot[2]:.3f}) limits=[0,{slide:.3f}m]")
 
+    stage.GetRootLayer().Save()
+    print(f"  ✓ Path D physics: {joint_count} joints written")
+    return True
 
-if __name__ == "__main__":
-    main()

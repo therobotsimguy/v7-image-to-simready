@@ -152,6 +152,7 @@ class PartContract:
     parent_part: Optional[str] = None       # e.g., "oven_chassis"
     joint_local_pos0: Optional[Tuple[float, float, float]] = None  # on parent
     joint_local_pos1: Tuple[float, float, float] = (0, 0, 0)      # on this part
+    spatial_children: List[str] = field(default_factory=list)  # parts spatially inside this one
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -185,6 +186,7 @@ class BehaviorContract:
     blender_complete: bool = False
     physx_complete: bool = False
     validated: bool = False
+    containment_tree: Dict[str, List[str]] = field(default_factory=dict)  # parent → [children] from geometry
 
     def get_part(self, name: str) -> Optional[PartContract]:
         for p in self.parts:
@@ -242,6 +244,7 @@ class BehaviorContract:
 
             part.plausible_behaviors = pd.get("plausible_behaviors", [])
             part.blender_actions = pd.get("blender_actions", [])
+            part.spatial_children = pd.get("spatial_children", [])
 
             # Reconstruct behaviors
             for bd in pd.get("valid_behaviors", []):
@@ -259,6 +262,8 @@ class BehaviorContract:
         for k in ["layer1_complete", "layer2_complete", "layer3_complete",
                    "blender_complete", "physx_complete", "validated"]:
             setattr(contract, k, data.get(k, False))
+
+        contract.containment_tree = data.get("containment_tree", {})
 
         return contract
 

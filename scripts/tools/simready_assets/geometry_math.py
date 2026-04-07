@@ -653,6 +653,16 @@ def damping_for_prismatic(mass_kg: float, settling_time_s: float = 1.5) -> float
     return round(mass_kg * GRAVITY * settling_time_s / 2, 2)
 
 
+def stiffness_for_prismatic(mass_kg: float) -> float:
+    """Compute stiffness for a prismatic joint so it holds closed at rest.
+
+    k = mass × gravity × 3  — light enough for a robot to pull open,
+    strong enough to prevent gravity-induced drift at rest.
+    Drive target defaults to 0 (closed position) in PhysX.
+    """
+    return round(mass_kg * GRAVITY * 3, 2)
+
+
 def inertia_box(mass_kg: float, width_m: float, height_m: float) -> float:
     """Moment of inertia for a rectangular panel rotating about one edge.
     I = (1/3) × m × L² (for rotation about edge, not center)

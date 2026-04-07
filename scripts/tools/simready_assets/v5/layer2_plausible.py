@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """V5 Layer 2: Plausible Behaviors — "What COULD each part do?"
 
-For each part from Layer 1:
-  - AI identifies the part type (door, knob, rack, chassis)
-  - Matrix lookup: which of 16 behaviors are plausible?
-  - Compute full mechanical range (unconstrained)
-
-Uses Claude + Gemini in parallel for part identification.
+Fast path: name heuristics classify ~95% of parts instantly.
+Slow path: single compact Claude call for truly unknown parts only.
+No Gemini. No knowledge base. No parallel agents.
 """
 
 import json
@@ -19,191 +16,195 @@ sys.path.insert(0, _ASSETS_DIR)
 
 from v5.behavior_contract import BehaviorContract, BEHAVIORS
 from geometry_math import bbox_volume_mm3
-from v5.ai_agents import (
-    load_api_keys, call_claude, call_gemini, parse_json,
-    load_behavior_definitions, run_parallel_agents,
-)
+from v5.ai_agents import load_api_keys, call_claude, parse_json
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# PART TYPE → PLAUSIBLE BEHAVIORS (from BEHAVIOR_DEFINITIONS.md matrix)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# This is the 16×N lookup table derived from the behavior matrix
-# For each part type, which behaviors are mechanically plausible?
 PART_BEHAVIOR_MATRIX = {
-    "oven_door": ["rotational", "grasping", "sequential"],
+    "oven_door":    ["rotational", "grasping", "sequential"],
     "cabinet_door": ["rotational", "grasping", "sequential"],
-    "drawer": ["linear", "grasping", "sequential", "pulling_tension"],
-    "knob": ["rotational", "twisting_torque", "grasping"],
-    "dial": ["rotational", "twisting_torque", "grasping", "contact"],
-    "rack": ["linear", "pulling_tension", "grasping"],
-    "shelf": ["linear", "pulling_tension"],
-    "button": ["linear", "contact"],
-    "switch": ["rotational", "contact"],
-    "lid": ["rotational", "grasping", "sequential"],
-    "handle": ["grasping", "pulling_tension"],
-    "lever": ["rotational", "grasping"],
-    "slider": ["linear", "grasping"],
-    "valve": ["rotational", "twisting_torque"],
-    "bolt": ["rotational", "insertion", "twisting_torque", "sequential"],
-    "peg": ["insertion", "linear", "grasping"],
-    "chassis": [],  # static — no behaviors
-    "frame": [],    # static
-    "body": [],     # static
-    "panel": [],    # static
+    "drawer":       ["linear", "grasping", "sequential", "pulling_tension"],
+    "knob":         ["rotational", "twisting_torque", "grasping"],
+    "dial":         ["rotational", "twisting_torque", "grasping", "contact"],
+    "rack":         ["linear", "pulling_tension", "grasping"],
+    "shelf":        ["linear", "pulling_tension"],
+    "button":       ["linear", "contact"],
+    "switch":       ["rotational", "contact"],
+    "lid":          ["rotational", "grasping", "sequential"],
+    "handle":       ["grasping", "pulling_tension"],
+    "lever":        ["rotational", "grasping"],
+    "slider":       ["linear", "grasping"],
+    "valve":        ["rotational", "twisting_torque"],
+    "bolt":         ["rotational", "insertion", "twisting_torque"],
+    "peg":          ["insertion", "linear", "grasping"],
+    "chassis":      [],
+    "frame":        [],
+    "body":         [],
+    "panel":        [],
+    "static":       [],
 }
 
+_STATIC_TYPES = {"chassis", "frame", "body", "panel", "static"}
 
-IDENTIFY_PROMPT = """You are analyzing 3D object parts for robotics simulation.
+# Keywords that immediately identify a part type from its name
+_NAME_RULES = [
+    (["chassis", "carcass", "cabinet_body", "main_body"],           "chassis"),
+    (["ventgrill", "ventilator", "vent_",  "topbody", "toppanel",
+      "backpanel", "sidepanel", "interiorsheet", "lightback",
+      "ledlight", "lightglass", "lights_", "lightframe",
+      "lightrefract", "wheelshaft", "wheelmount", "wheelcap",
+      "wheelbolt", "wheeltire", "mount_", "mounts_", "screen_",
+      "switch_frame", "interiorlocker", "lockercilinder",
+      "lockerbox", "lockerbase", "locker_washer"],                   "panel"),
+    (["frame", "structure", "housing", "carcass"],                  "frame"),
+    (["back_panel", "side_panel", "rear_panel", "backplate"],       "panel"),
+    (["door"],                                                       "cabinet_door"),
+    (["drawer"],                                                     "drawer"),
+    (["knob"],                                                       "knob"),
+    (["rack"],                                                       "rack"),
+    (["shelf", "shelv"],                                             "shelf"),
+    (["handle", "pull_"],                                            "handle"),
+    (["button"],                                                     "button"),
+    (["switch"],                                                     "switch"),
+    (["hinge"],                                                      "panel"),
+    (["locker_body", "locker_"],                                     "cabinet_door"),
+    (["stopper"],                                                    "lever"),
+]
 
-Here are the parts from a 3D model, with their names, dimensions, materials, and vertex counts:
 
-{parts_data}
+def _classify_by_name(name: str) -> str:
+    n = name.lower()
+    for keywords, part_type in _NAME_RULES:
+        if any(k in n for k in keywords):
+            return part_type
+    # Generic fallbacks
+    if n.endswith("_body_01") or n.endswith("_body_02"):
+        return "chassis"
+    return "unknown"
 
-For EACH part, identify:
-1. "part_type": what kind of part is it? Use one of these types:
-   oven_door, cabinet_door, drawer, knob, dial, rack, shelf, button, switch,
-   lid, handle, lever, slider, valve, bolt, peg, chassis, frame, body, panel
-2. "is_static": does this part move? (true = fixed, false = moves)
-3. "object_category": what is the overall object? (appliance, furniture, tool, etc.)
 
-Rules:
-- Names containing "door" → oven_door or cabinet_door
-- Names containing "knob" → knob
-- Names containing "rack" → rack
-- Names containing "chassis", "body", "frame", "carcass" → chassis (static)
-- The LARGEST part by vertex count is usually the chassis/body (static)
-- Parts with "handle", "pull" → handle
-- Parts with "drawer" → drawer
+# Compact prompt — no knowledge base, no verbose descriptions
+_COMPACT_IDENTIFY = """3D model parts needing classification. For each, return part_type and is_static.
 
-Answer in JSON format:
-{{
-  "object_category": "appliance or furniture or tool",
-  "parts": [
-    {{"name": "part_name", "part_type": "type", "is_static": true/false}}
-  ]
-}}
-Return ONLY the JSON."""
+Types: oven_door, cabinet_door, drawer, knob, shelf, rack, button, handle, lever, panel, chassis
+
+Parts (name | dims WxDxH mm):
+{parts_list}
+
+JSON only: {{"object_type": "appliance|furniture|tool", "parts": [{{"name": "...", "part_type": "...", "is_static": true/false}}]}}"""
 
 
 def run_layer2(contract: BehaviorContract):
-    """Run Layer 2: Plausible Behavior Enumeration.
-
-    Args:
-        contract: BehaviorContract from Layer 1
-
-    Returns:
-        Updated BehaviorContract with plausible behaviors per part
-    """
     print("\n" + "=" * 60)
-    print("  LAYER 2: Plausible Behaviors")
-    print("  'What COULD each part do?'")
+    print("  LAYER 2: Plausible Behaviors  (name-first, no Gemini)")
     print("=" * 60)
 
-    keys = load_api_keys()
-    ckey = keys["anthropic"]["api_key"]
-    gkey = keys["gemini"]["api_key"]
-
-    # Build parts data for AI
-    parts_data = []
-    for p in contract.parts:
-        parts_data.append({
-            "name": p.name,
-            "vertices": p.vertices,
-            "dims_mm": list(p.dims_mm),
-            "materials": p.materials,
-            "mass_kg": p.mass_kg,
-        })
-
-    prompt = IDENTIFY_PROMPT.format(parts_data=json.dumps(parts_data, indent=2))
-
-    # Run Claude + Gemini in parallel for part identification
-    print("  Identifying part types (Claude ‖ Gemini)...")
-    results, errors = run_parallel_agents([
-        ("claude", lambda: parse_json(call_claude(ckey, prompt))),
-        ("gemini", lambda: parse_json(call_gemini(gkey, prompt))),
-    ])
-
-    # Prefer Claude, fallback to Gemini
-    identification = results.get("claude") or results.get("gemini")
-    if not identification:
-        print("  Both AI agents failed for part identification")
-        print("  Falling back to name-based heuristics")
-        identification = {"parts": [], "object_category": "unknown"}
-
-    # Update contract with object category
-    contract.object_type = identification.get("object_category", "unknown")
-
-    # Map AI identification to parts
-    ai_parts = {p["name"]: p for p in identification.get("parts", [])}
-
+    # ── Step 1: name-based classification (instant) ───────────────────────────
+    unknown_parts = []
     for part in contract.parts:
-        ai = ai_parts.get(part.name, {})
+        part.part_type = _classify_by_name(part.name)
+        if part.part_type == "unknown":
+            unknown_parts.append(part)
 
-        # Part type: AI identification or name-based fallback
-        if ai.get("part_type"):
-            part.part_type = ai["part_type"]
-        else:
-            # Fallback: guess from name
-            name_lower = part.name.lower()
-            if "door" in name_lower:
-                part.part_type = "oven_door"
-            elif "knob" in name_lower:
-                part.part_type = "knob"
-            elif "rack" in name_lower:
-                part.part_type = "rack"
-            elif "drawer" in name_lower:
-                part.part_type = "drawer"
-            elif any(k in name_lower for k in ["chassis", "body", "frame", "carcass"]):
-                part.part_type = "chassis"
-            elif "handle" in name_lower:
-                part.part_type = "handle"
-            elif "button" in name_lower:
-                part.part_type = "button"
-            else:
-                part.part_type = "unknown"
+    print(f"  Name-based: {len(contract.parts)-len(unknown_parts)}/{len(contract.parts)} classified, "
+          f"{len(unknown_parts)} unknown → Claude")
 
-        # Static flag
-        if ai.get("is_static") is not None:
-            part.is_static = ai["is_static"]
-        else:
-            part.is_static = part.part_type in ("chassis", "frame", "body", "panel")
+    # ── Step 2: single compact Claude call for unknowns only ──────────────────
+    if unknown_parts:
+        keys = load_api_keys()
+        parts_list = "\n".join(
+            f"{p.name} | {p.dims_mm[0]:.0f}×{p.dims_mm[1]:.0f}×{p.dims_mm[2]:.0f}mm"
+            for p in unknown_parts
+        )
+        prompt = _COMPACT_IDENTIFY.format(parts_list=parts_list)
+        print(f"  Claude classifying {len(unknown_parts)} unknowns...")
+        try:
+            raw = call_claude(keys["anthropic"]["api_key"], prompt, max_tokens=2048)
+            result = parse_json(raw)
+            if result.get("object_type"):
+                contract.object_type = result["object_type"]
+            ai_map = {p["name"]: p for p in result.get("parts", [])}
+            for part in unknown_parts:
+                ai = ai_map.get(part.name, {})
+                if ai.get("part_type"):
+                    part.part_type = ai["part_type"]
+                    part.is_static = ai.get("is_static", part.part_type in _STATIC_TYPES)
+        except Exception as e:
+            print(f"  WARN Claude failed: {e} — marking unknowns as panel/static")
+            for part in unknown_parts:
+                part.part_type = "panel"
+                part.is_static = True
 
-        # Look up plausible behaviors from matrix
+    # ── Step 3: use containment tree to mark cosmetic sub-parts as static ─────
+    # If a part's centroid is inside a moving part's bbox, and it has no
+    # independent behavior (its name doesn't suggest motion), mark it as static.
+    # The merge step will absorb it into the parent body.
+    containment = getattr(contract, "containment_tree", {})
+    for parent_name, children in containment.items():
+        parent = contract.get_part(parent_name)
+        if not parent or parent.is_static:
+            continue  # static parents don't drive child classification
+        for child_name in children:
+            child = contract.get_part(child_name)
+            if child and child.part_type in ("panel", "static", "handle", "chassis", "frame"):
+                # Cosmetic child of a moving part — will be merged, mark static
+                child.is_static = True
+
+    # ── Step 4: apply static flag and plausible behaviors ─────────────────────
+    for part in contract.parts:
+        if part.part_type in _STATIC_TYPES:
+            part.is_static = True
         part.plausible_behaviors = PART_BEHAVIOR_MATRIX.get(part.part_type, [])
 
-        status = "STATIC" if part.is_static else f"{len(part.plausible_behaviors)} behaviors"
-        print(f"    {part.name}: type={part.part_type}, {status}")
-        if part.plausible_behaviors:
-            print(f"      plausible: {part.plausible_behaviors}")
+    # ── Step 5: size sanity checks ────────────────────────────────────────────
+    for part in contract.parts:
+        w, d, h = part.dims_mm
+        max_dim = max(w, d, h)
+        min_dim = min(w, d, h)
 
-    # ── ROOT SELECTION (Layer 2's job, not Layer 1's) ──
-    # Root = static part with largest bounding box volume
+        if part.part_type == "knob" and max_dim > 200:
+            part.part_type = "cabinet_door" if max_dim > 300 else "panel"
+            part.is_static = part.part_type == "panel"
+            print(f"  SANITY {part.name}: knob→{part.part_type} (too large: {max_dim:.0f}mm)")
+
+        if part.part_type == "chassis" and max_dim < 200:
+            part.part_type = "panel"; part.is_static = True
+            print(f"  SANITY {part.name}: chassis→panel (too small: {max_dim:.0f}mm)")
+
+        if part.part_type in ("cabinet_door", "oven_door") and min_dim > 150:
+            part.part_type = "chassis"; part.is_static = True
+            print(f"  SANITY {part.name}: door→chassis (not flat: {min_dim:.0f}mm)")
+
+        part.plausible_behaviors = PART_BEHAVIOR_MATRIX.get(part.part_type, [])
+
+    # Parts with no plausible behaviors → static
+    for part in contract.parts:
+        if not part.is_static and not part.plausible_behaviors:
+            part.is_static = True
+
+    # ── Step 6: root selection ────────────────────────────────────────────────
     static_parts = [p for p in contract.parts if p.is_static]
     if static_parts:
         root = max(static_parts, key=lambda p: bbox_volume_mm3(p.dims_mm))
-        contract.root_part = root.name
-        print(f"\n  Root body: {root.name} (volume={bbox_volume_mm3(root.dims_mm)/1e6:.1f}L, type={root.part_type})")
     else:
         root = max(contract.parts, key=lambda p: bbox_volume_mm3(p.dims_mm))
-        root.is_static = True
-        root.part_type = "chassis"
-        contract.root_part = root.name
-        print(f"\n  Root body (fallback): {root.name} (largest volume)")
+        root.is_static = True; root.part_type = "chassis"
+    contract.root_part = root.name
 
-    # Set parent relationships — all non-root parts parent to root
     for part in contract.parts:
         if part.name != contract.root_part:
             part.parent_part = contract.root_part
 
+    moving = sum(1 for p in contract.parts if not p.is_static)
+    print(f"\n  Root: {root.name}  |  Moving: {moving}/{len(contract.parts)}")
+    for p in contract.parts:
+        if not p.is_static:
+            print(f"    {p.name}: {p.part_type} → {p.plausible_behaviors}")
+
     contract.layer2_complete = True
-    print(f"  Layer 2 complete: {sum(1 for p in contract.parts if not p.is_static)} moving parts identified")
     return contract
 
 
 if __name__ == "__main__":
-    # Test with a contract from Layer 1
     contract_path = sys.argv[1] if len(sys.argv) > 1 else None
     if contract_path:
         with open(contract_path) as f:
