@@ -1,15 +1,20 @@
-- [V7 Pipeline](v7_pipeline.md) — V7 architecture: stages A-F, entry points, output structure
-- [V7 Blender Lessons](v7_blender_lessons.md) — Cylinder origin bug fix, pivot=origin rule, parenting, USD export behavior
-- [V7 Physics Lessons](v7_physics_lessons.md) — ArticulationRootAPI setup, joint localPos, joint types, Isaac Sim run command
-- [Project Setup](project_setup.md) — Fresh install of Isaac Sim + Isaac Lab as of 2026-03-25
-- [Blender MCP Setup](blender_mcp_setup.md) — Blender MCP addon on localhost:9876, direct socket connection
-- [Pipeline & Lessons](lessons_pointer.md) — ALL lessons and pipeline knowledge is in scripts/tools/LESSONS.md — read that first
-- [Next Session](next_session_pointer.md) — Start here: scripts/tools/next_session.md has what to do next + known issues + architecture decisions
-- [V3 Orchestrator](v3_orchestrator_implementation.md) — V3 pipeline v1.27: physics reasoning (Gemini+Claude), math engine, damping fix, hinge geometry, all lessons
-- [Flag Errors Immediately](feedback_flag_errors_immediately.md) — Always flag failing models to user immediately, don't silently continue
-- [No V1 in V3](feedback_no_v1_in_v3.md) — NEVER import V1 code into V3. Build from scratch using V3 measured data
-- [V3 April 4 Status](v3_session_april4.md) — Full V3 pipeline status: what works, what's broken, next steps
-- [Do Not Implement Without Permission](feedback_no_implement_without_permission.md) — Discuss before coding. Don't create lookup tables or implement options without user approval
-- [Blender Asset Generator](blender_asset_generator.md) — AI debate pipeline, Blender 4.x lessons, geometry per object type, materials, debate fixes
-- [V4 Orchestrator](v4_orchestrator.md) — V4: general-purpose multi-agent pipeline (A+B+MathEngine+C+D), any object type, behavioral constraints, data flywheel
-- [GitHub Credentials](github_credentials.md) — therobotsimguy account, token, repo info
+# SimReady Asset Pipeline — Memory Index
+
+## START HERE
+- [ALL LESSONS](ALL_LESSONS.md) — single consolidated file: setup, feedback rules, V3/V4/V7 lessons, Blender physics lessons
+
+## Detail Files (if you need depth on a specific topic)
+- [V7 Pipeline](v7_pipeline.md) — V7 stage architecture and entry points
+- [V7 Blender Lessons](v7_blender_lessons.md) — cylinder fix, pivot=origin, parenting, USD export
+- [V7 Physics Lessons](v7_physics_lessons.md) — ArticulationRoot, joint localPos, joint types
+- [Blender MCP Setup](blender_mcp_setup.md) — startup order, direct socket connection
+- [Project Setup](project_setup.md) — Isaac Sim/Lab install info
+- [V3 Orchestrator](v3_orchestrator_implementation.md) — full V3 architecture and all bug fixes
+- [V4 Orchestrator](v4_orchestrator.md) — V4 multi-agent pipeline
+- [Blender Asset Generator](blender_asset_generator.md) — V4 detailed lessons
+- [GitHub Credentials](github_credentials.md) — therobotsimguy token
+
+## Feedback Rules (always apply)
+- [Flag Errors Immediately](feedback_flag_errors_immediately.md)
+- [No Implement Without Permission](feedback_no_implement_without_permission.md)
+- [No Old Code in New Version](feedback_no_v1_in_v3.md)
