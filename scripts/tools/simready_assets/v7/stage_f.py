@@ -339,16 +339,41 @@ def _dispatch_joint(
 # PHYSICS SCENE
 # ═══════════════════════════════════════════════════════════════════
 
-def _add_physics_scene(stage: Usd.Stage) -> None:
-    """Add a UsdPhysics.Scene to /root/physics_scene."""
-    scene_path = Sdf.Path("/root/physics_scene")
-    existing = stage.GetPrimAtPath(scene_path)
-    if not existing or not existing.IsValid():
+def _add_physics_scene(stage: Usd.Stage) -> Sdf.Path:
+    """Create UsdPhysics.Scene at /physicsScene (Isaac Sim default path).
+
+    Rigid bodies and colliders must set physics:simulationOwner → this prim or
+    Kit may not register them for simulation / viewport shift+drag picking.
+    """
+    scene_path = Sdf.Path("/physicsScene")
+    if not stage.GetPrimAtPath(scene_path).IsValid():
         UsdPhysics.Scene.Define(stage, scene_path)
     scene = UsdPhysics.Scene.Get(stage, scene_path)
     if scene:
         scene.CreateGravityDirectionAttr(Gf.Vec3f(0, 0, -1))
         scene.CreateGravityMagnitudeAttr(9.81)
+    return scene_path
+
+
+def _bind_physics_prims_to_scene(stage: Usd.Stage, scene_path: Sdf.Path) -> int:
+    """Set physics:simulationOwner on every RigidBodyAPI and CollisionAPI prim."""
+    n = 0
+    for prim in stage.Traverse():
+        if UsdPhysics.RigidBodyAPI(prim):
+            api = UsdPhysics.RigidBodyAPI(prim)
+            rel = api.GetSimulationOwnerRel()
+            if not rel:
+                rel = api.CreateSimulationOwnerRel()
+            rel.SetTargets([scene_path])
+            n += 1
+        if UsdPhysics.CollisionAPI(prim):
+            api = UsdPhysics.CollisionAPI(prim)
+            rel = api.GetSimulationOwnerRel()
+            if not rel:
+                rel = api.CreateSimulationOwnerRel()
+            rel.SetTargets([scene_path])
+            n += 1
+    return n
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -376,7 +401,8 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
 
     # ── Step 1: Physics Scene ────────────────────────────────────────
     print(f"\n  [F1] Physics scene...")
-    _add_physics_scene(stage)
+    scene_path = _add_physics_scene(stage)
+    print(f"       {scene_path}")
 
     # ── Step 2: Find root body ───────────────────────────────────────
     root_part  = next((p for p in parts if p.get("parent") in ("none", None, "")), parts[0])
@@ -469,14 +495,19 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
     else:
         print(f"\n  [F5] RIGID — no joints")
 
-    # ── Step 6: Save ─────────────────────────────────────────────────
+    # ── Step 6: Bind every body/collider to PhysicsScene (Isaac / PhysX) ─
+    print(f"\n  [F6] simulationOwner → {scene_path}...")
+    n_bound = _bind_physics_prims_to_scene(stage, scene_path)
+    print(f"       bound {n_bound} rigid body / collision prims")
+
+    # ── Step 7: Save ─────────────────────────────────────────────────
     stage.GetRootLayer().Save()
     elapsed = time.time() - t0
     print(f"\n  ✓ Stage F complete — {elapsed:.1f}s")
     print(f"  Physics USD: {output_usd}")
     print(f"{'='*60}")
 
-    # ── Step 7: Quick verify ─────────────────────────────────────────
+    # ── Step 8: Quick verify ─────────────────────────────────────────
     stage2   = Usd.Stage.Open(output_usd)
     def _has_api(prim, api_name):
         return any(api_name in str(s) for s in prim.GetAppliedSchemas())

@@ -125,6 +125,7 @@ child.matrix_parent_inverse = parent.matrix_world.inverted()
 - CollisionAPI + MeshCollisionAPI on Mesh prims (children of Xform)
 - `approximation = "convexHull"` for all moving parts
 - **Isaac Sim shift+drag picking:** knobs/handles have no `RigidBodyAPI` (grandchildren). If they have mesh colliders, clicks hit a shape with no body → door/drawer won’t move. **Omit collision** on parts whose names contain `knob`, `handle`, or `divider` so picks hit the parent door/drawer mesh.
+- **PhysicsScene + simulationOwner:** use **`/physicsScene`** (Isaac default). Set **`physics:simulationOwner`** on **every** `RigidBodyAPI` and `CollisionAPI` prim to that scene. Empty owners → bodies may not simulate or respond to viewport picking.
 
 **Isaac Sim Load (standing rule for agent + user)**
 
