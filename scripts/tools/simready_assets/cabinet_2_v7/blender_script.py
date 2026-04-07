@@ -132,7 +132,6 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
-    set_origin_keep_visual(obj, -0.285, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── middle_door ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.0, 0.264, 0.305))
@@ -149,7 +148,6 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
-    set_origin_keep_visual(obj, -0.1875, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── right_door ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(0.4551, 0.264, 0.305))
@@ -166,7 +164,6 @@ def build():
         bsdf.inputs["Roughness"].default_value  = 0.7
         bsdf.inputs["Metallic"].default_value   = 0
     obj.data.materials.append(mat)
-    set_origin_keep_visual(obj, 0.1875, 0.0, 0.0)
     bpy.ops.object.shade_smooth()
     # ── left_drawer_handle ──────────────────────────────────────────────────
     bpy.ops.mesh.primitive_cube_add(size=1, location=(-0.4551, 0.2925, 0.7))
@@ -217,7 +214,8 @@ def build():
     obj.data.materials.append(mat)
     bpy.ops.object.shade_smooth()
     # ── left_door_knob ──────────────────────────────────────────────────
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(-0.4551, 0.289, 0.305))
+    # Create at ORIGIN — transform_apply(rotation) resets location if created at non-zero pos
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0, 0, 0))
     obj = bpy.context.active_object
     obj.name = "left_door_knob"
     # Rotate so cylinder protrudes along Y axis (depth direction)
@@ -226,6 +224,8 @@ def build():
     # Scale to exact spec dims: X=width, Y=depth (protrusion), Z=height
     obj.scale = (0.032, 0.028, 0.032)
     bpy.ops.object.transform_apply(scale=True)
+    # Set location AFTER all transforms — matrix_world is now reliable
+    obj.location = (-0.4551, 0.289, 0.305)
     mat = bpy.data.materials.new("left_door_knob_mat")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -237,7 +237,8 @@ def build():
     obj.data.materials.append(mat)
     bpy.ops.object.shade_smooth()
     # ── middle_door_knob ──────────────────────────────────────────────────
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0.0, 0.289, 0.305))
+    # Create at ORIGIN — transform_apply(rotation) resets location if created at non-zero pos
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0, 0, 0))
     obj = bpy.context.active_object
     obj.name = "middle_door_knob"
     # Rotate so cylinder protrudes along Y axis (depth direction)
@@ -246,6 +247,8 @@ def build():
     # Scale to exact spec dims: X=width, Y=depth (protrusion), Z=height
     obj.scale = (0.032, 0.028, 0.032)
     bpy.ops.object.transform_apply(scale=True)
+    # Set location AFTER all transforms — matrix_world is now reliable
+    obj.location = (0.0, 0.289, 0.305)
     mat = bpy.data.materials.new("middle_door_knob_mat")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -257,7 +260,8 @@ def build():
     obj.data.materials.append(mat)
     bpy.ops.object.shade_smooth()
     # ── right_door_knob ──────────────────────────────────────────────────
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0.4551, 0.289, 0.305))
+    # Create at ORIGIN — transform_apply(rotation) resets location if created at non-zero pos
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0, 0, 0))
     obj = bpy.context.active_object
     obj.name = "right_door_knob"
     # Rotate so cylinder protrudes along Y axis (depth direction)
@@ -266,6 +270,8 @@ def build():
     # Scale to exact spec dims: X=width, Y=depth (protrusion), Z=height
     obj.scale = (0.032, 0.028, 0.032)
     bpy.ops.object.transform_apply(scale=True)
+    # Set location AFTER all transforms — matrix_world is now reliable
+    obj.location = (0.4551, 0.289, 0.305)
     mat = bpy.data.materials.new("right_door_knob_mat")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -341,94 +347,92 @@ def build():
     obj.data.materials.append(mat)
     bpy.ops.object.shade_smooth()
     # ── Parent assignments ──────────────────────────────────────
-    # matrix_parent_inverse keeps child's WORLD position unchanged after parenting.
-    # Without it, Blender reinterprets the child's world coords as local-to-parent,
-    # compounding the parent's transform and placing the child at the wrong location.
+    bpy.context.view_layer.update()  # ensure matrix_world is current for all objects
     if "top_surface" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["top_surface"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["top_surface"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "left_drawer" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["left_drawer"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["left_drawer"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "middle_drawer" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["middle_drawer"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["middle_drawer"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "right_drawer" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["right_drawer"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["right_drawer"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "left_door" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["left_door"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["left_door"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "middle_door" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["middle_door"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["middle_door"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "right_door" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["right_door"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["right_door"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "left_drawer_handle" in bpy.data.objects and "left_drawer" in bpy.data.objects:
-        _child  = bpy.data.objects["left_drawer_handle"]
-        _parent = bpy.data.objects["left_drawer"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["left_drawer_handle"]
+        parent = bpy.data.objects["left_drawer"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "middle_drawer_handle" in bpy.data.objects and "middle_drawer" in bpy.data.objects:
-        _child  = bpy.data.objects["middle_drawer_handle"]
-        _parent = bpy.data.objects["middle_drawer"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["middle_drawer_handle"]
+        parent = bpy.data.objects["middle_drawer"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "right_drawer_handle" in bpy.data.objects and "right_drawer" in bpy.data.objects:
-        _child  = bpy.data.objects["right_drawer_handle"]
-        _parent = bpy.data.objects["right_drawer"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["right_drawer_handle"]
+        parent = bpy.data.objects["right_drawer"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "left_door_knob" in bpy.data.objects and "left_door" in bpy.data.objects:
-        _child  = bpy.data.objects["left_door_knob"]
-        _parent = bpy.data.objects["left_door"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["left_door_knob"]
+        parent = bpy.data.objects["left_door"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "middle_door_knob" in bpy.data.objects and "middle_door" in bpy.data.objects:
-        _child  = bpy.data.objects["middle_door_knob"]
-        _parent = bpy.data.objects["middle_door"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["middle_door_knob"]
+        parent = bpy.data.objects["middle_door"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "right_door_knob" in bpy.data.objects and "right_door" in bpy.data.objects:
-        _child  = bpy.data.objects["right_door_knob"]
-        _parent = bpy.data.objects["right_door"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["right_door_knob"]
+        parent = bpy.data.objects["right_door"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "door_divider_1" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["door_divider_1"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["door_divider_1"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "door_divider_2" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["door_divider_2"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["door_divider_2"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "drawer_divider_1" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["drawer_divider_1"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["drawer_divider_1"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     if "drawer_divider_2" in bpy.data.objects and "main_frame" in bpy.data.objects:
-        _child  = bpy.data.objects["drawer_divider_2"]
-        _parent = bpy.data.objects["main_frame"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()
+        child = bpy.data.objects["drawer_divider_2"]
+        parent = bpy.data.objects["main_frame"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()
     # ── Export ──────────────────────────────────────────────────────────
     bpy.ops.wm.save_as_mainfile(filepath=r"/home/msi/IsaacLab/scripts/tools/simready_assets/cabinet_2_v7/teak_outdoor_sideboard.blend")
     print("Saved blend:", r"/home/msi/IsaacLab/scripts/tools/simready_assets/cabinet_2_v7/teak_outdoor_sideboard.blend")

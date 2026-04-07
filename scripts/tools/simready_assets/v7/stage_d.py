@@ -144,9 +144,8 @@ def _box_part(p: dict) -> str:
     # Material
     code += _mat_block(name, mat)
 
-    # Pivot for revolute doors
-    if btype == "ROTATIONAL" and pivot and "N/A" not in pivot:
-        code += _origin_block(pivot, dims)
+    # Pivot: NOT set here — Stage F handles localPos0 in the USD RevoluteJoint.
+    # Shifting the Blender origin causes parenting cascade bugs with no sim benefit.
 
     # Smooth shading
     code += f"""
@@ -170,7 +169,8 @@ def _cylinder_part(p: dict) -> str:
 
     code = f"""
     # ── {name} ──────────────────────────────────────────────────
-    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=({x}, {y}, {z}))
+    # Create at ORIGIN — transform_apply(rotation) resets location if created at non-zero pos
+    bpy.ops.mesh.primitive_cylinder_add(radius=0.5, depth=1.0, location=(0, 0, 0))
     obj = bpy.context.active_object
     obj.name = "{name}"
     # Rotate so cylinder protrudes along Y axis (depth direction)
@@ -178,7 +178,9 @@ def _cylinder_part(p: dict) -> str:
     bpy.ops.object.transform_apply(rotation=True)
     # Scale to exact spec dims: X=width, Y=depth (protrusion), Z=height
     obj.scale = ({w}, {d}, {h})
-    bpy.ops.object.transform_apply(scale=True)"""
+    bpy.ops.object.transform_apply(scale=True)
+    # Set location AFTER all transforms — matrix_world is now reliable
+    obj.location = ({x}, {y}, {z})"""
 
     code += _mat_block(name, mat)
     code += f"""
@@ -233,20 +235,30 @@ def _part_code(p: dict) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 def _parent_block(parts: list) -> str:
+    """
+    Parent each child to its parent object.
+
+    All objects are created with their world position already set (location = position_xyz).
+    Blender's matrix_parent_inverse mechanism (set automatically on parenting) keeps the
+    child at its current world position. This works correctly as long as matrix_world is
+    current at parenting time — which it is, since all parts are created at their final
+    location before this block runs.
+    """
     code = "\n    # ── Parent assignments ──────────────────────────────────────"
     code += """
-    # matrix_parent_inverse keeps child's WORLD position unchanged after parenting.
-    # Without it, Blender reinterprets the child's world coords as local-to-parent,
-    # compounding the parent's transform and placing the child at the wrong location."""
+    bpy.context.view_layer.update()  # ensure matrix_world is current for all objects"""
     for p in parts:
-        parent = p.get("parent", "")
-        if parent and parent not in ("none", None, ""):
-            code += f"""
-    if "{p['part']}" in bpy.data.objects and "{parent}" in bpy.data.objects:
-        _child  = bpy.data.objects["{p['part']}"]
-        _parent = bpy.data.objects["{parent}"]
-        _child.parent = _parent
-        _child.matrix_parent_inverse = _parent.matrix_world.inverted()"""
+        parent_name = p.get("parent", "")
+        if not parent_name or parent_name in ("none", None, ""):
+            continue
+
+        code += f"""
+    if "{p['part']}" in bpy.data.objects and "{parent_name}" in bpy.data.objects:
+        child = bpy.data.objects["{p['part']}"]
+        parent = bpy.data.objects["{parent_name}"]
+        child.parent = parent
+        child.matrix_parent_inverse = parent.matrix_world.inverted()"""
+
     return code
 
 

@@ -51,23 +51,7 @@
           "DEFORMATION \u2014 rigid hardwood frame does not deform under normal use",
           "ROLLING \u2014 no wheels or rolling elements on the base"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 1500,
-        "depth_mm": 550,
-        "height_mm": 870
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "main frame top",
-      "position_xyz": [
-        0.0,
-        0.0,
-        0.435
-      ]
+      }
     },
     {
       "part": "top_surface",
@@ -109,23 +93,7 @@
           "LINEAR_TRANSLATIONAL \u2014 the top does not slide or translate",
           "DEFORMATION \u2014 rigid wood surface does not deform under normal loads"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 1500,
-        "depth_mm": 550,
-        "height_mm": 30
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "top surface",
-      "position_xyz": [
-        0.0,
-        0.0,
-        0.885
-      ]
+      }
     },
     {
       "part": "left_drawer",
@@ -169,23 +137,7 @@
           "DEFORMATION \u2014 rigid wood drawer box does not deform",
           "TWISTING_TORQUE \u2014 no twisting motion is involved in drawer operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 570,
-        "depth_mm": 500,
-        "height_mm": 180
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        -0.4551,
-        0.025,
-        0.7
-      ]
+      }
     },
     {
       "part": "middle_drawer",
@@ -229,23 +181,7 @@
           "DEFORMATION \u2014 rigid wood drawer box does not deform",
           "TWISTING_TORQUE \u2014 no twisting motion is involved in drawer operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 375,
-        "depth_mm": 500,
-        "height_mm": 180
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.0,
-        0.025,
-        0.7
-      ]
+      }
     },
     {
       "part": "right_drawer",
@@ -289,23 +225,7 @@
           "DEFORMATION \u2014 rigid wood drawer box does not deform",
           "TWISTING_TORQUE \u2014 no twisting motion is involved in drawer operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 375,
-        "depth_mm": 500,
-        "height_mm": 180
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.4551,
-        0.025,
-        0.7
-      ]
+      }
     },
     {
       "part": "left_door",
@@ -349,23 +269,7 @@
           "DEFORMATION \u2014 rigid wood panel door does not deform",
           "ROLLING \u2014 no rolling elements in door operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 570,
-        "depth_mm": 22,
-        "height_mm": 570
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "door middle door right door",
-      "position_xyz": [
-        -0.4551,
-        0.264,
-        0.305
-      ]
+      }
     },
     {
       "part": "middle_door",
@@ -409,23 +313,7 @@
           "DEFORMATION \u2014 rigid wood panel door does not deform",
           "ROLLING \u2014 no rolling elements in door operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 375,
-        "depth_mm": 22,
-        "height_mm": 570
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.0,
-        0.264,
-        0.305
-      ]
+      }
     },
     {
       "part": "right_door",
@@ -469,23 +357,7 @@
           "DEFORMATION \u2014 rigid wood panel door does not deform",
           "ROLLING \u2014 no rolling elements in door operation"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 375,
-        "depth_mm": 22,
-        "height_mm": 570
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "door middle door right door",
-      "position_xyz": [
-        0.4551,
-        0.264,
-        0.305
-      ]
+      }
     },
     {
       "part": "left_drawer_handle",
@@ -528,23 +400,7 @@
           "DEFORMATION \u2014 metal handle does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 no twist action is needed to operate the drawer handle"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 160,
-        "depth_mm": 35,
-        "height_mm": 30
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        -0.4551,
-        0.2925,
-        0.7
-      ]
+      }
     },
     {
       "part": "middle_drawer_handle",
@@ -587,23 +443,7 @@
           "DEFORMATION \u2014 metal handle does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 no twist action is needed to operate the drawer handle"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 160,
-        "depth_mm": 35,
-        "height_mm": 30
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.0,
-        0.2925,
-        0.7
-      ]
+      }
     },
     {
       "part": "right_drawer_handle",
@@ -646,23 +486,7 @@
           "DEFORMATION \u2014 metal handle does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 no twist action is needed to operate the drawer handle"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 160,
-        "depth_mm": 35,
-        "height_mm": 30
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.4551,
-        0.2925,
-        0.7
-      ]
+      }
     },
     {
       "part": "left_door_knob",
@@ -705,23 +529,7 @@
           "DEFORMATION \u2014 metal knob does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 the knob is a fixed pull knob, not a twist-type mechanism"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 32,
-        "depth_mm": 28,
-        "height_mm": 32
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "door middle door right door",
-      "position_xyz": [
-        -0.4551,
-        0.289,
-        0.305
-      ]
+      }
     },
     {
       "part": "middle_door_knob",
@@ -764,23 +572,7 @@
           "DEFORMATION \u2014 metal knob does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 the knob is a fixed pull knob, not a twist-type mechanism"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 32,
-        "depth_mm": 28,
-        "height_mm": 32
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "drawer middle drawer handle",
-      "position_xyz": [
-        0.0,
-        0.289,
-        0.305
-      ]
+      }
     },
     {
       "part": "right_door_knob",
@@ -823,216 +615,7 @@
           "DEFORMATION \u2014 metal knob does not deform under normal grip force",
           "TWISTING_TORQUE \u2014 the knob is a fixed pull knob, not a twist-type mechanism"
         ]
-      },
-      "dims_reconciled": {
-        "width_mm": 32,
-        "depth_mm": 28,
-        "height_mm": 32
-      },
-      "dims_source": {
-        "width": "A_low_b_conf",
-        "depth": "A_only",
-        "height": "A_low_b_conf"
-      },
-      "b_match": "door middle door right door",
-      "position_xyz": [
-        0.4551,
-        0.289,
-        0.305
-      ]
-    },
-    {
-      "part": "door_divider_1",
-      "geometry": "box",
-      "dims_mm": {
-        "width": 20.0,
-        "depth": 550,
-        "height": 570.0
-      },
-      "dims_reconciled": {
-        "width_mm": 20.0,
-        "depth_mm": 550,
-        "height_mm": 570.0
-      },
-      "dims_source": {
-        "width": "inferred",
-        "depth": "inferred",
-        "height": "inferred"
-      },
-      "material": {
-        "type": "wood",
-        "color_rgb": [
-          0.73,
-          0.56,
-          0.38
-        ],
-        "metallic": 0,
-        "roughness": 0.7
-      },
-      "is_separate_object": false,
-      "pivot": "N/A fixed",
-      "parent": "main_frame",
-      "cavity_face_delete": false,
-      "behavior": {
-        "behavior_type": "CONTACT_BASED",
-        "active_constraints": {}
-      },
-      "b_match": null,
-      "position_xyz": [
-        -0.1788,
-        0.0,
-        0.305
-      ]
-    },
-    {
-      "part": "door_divider_2",
-      "geometry": "box",
-      "dims_mm": {
-        "width": 20.0,
-        "depth": 550,
-        "height": 570.0
-      },
-      "dims_reconciled": {
-        "width_mm": 20.0,
-        "depth_mm": 550,
-        "height_mm": 570.0
-      },
-      "dims_source": {
-        "width": "inferred",
-        "depth": "inferred",
-        "height": "inferred"
-      },
-      "material": {
-        "type": "wood",
-        "color_rgb": [
-          0.73,
-          0.56,
-          0.38
-        ],
-        "metallic": 0,
-        "roughness": 0.7
-      },
-      "is_separate_object": false,
-      "pivot": "N/A fixed",
-      "parent": "main_frame",
-      "cavity_face_delete": false,
-      "behavior": {
-        "behavior_type": "CONTACT_BASED",
-        "active_constraints": {}
-      },
-      "b_match": null,
-      "position_xyz": [
-        0.2276,
-        0.0,
-        0.305
-      ]
-    },
-    {
-      "part": "drawer_divider_1",
-      "geometry": "box",
-      "dims_mm": {
-        "width": 20.0,
-        "depth": 550,
-        "height": 180.0
-      },
-      "dims_reconciled": {
-        "width_mm": 20.0,
-        "depth_mm": 550,
-        "height_mm": 180.0
-      },
-      "dims_source": {
-        "width": "inferred",
-        "depth": "inferred",
-        "height": "inferred"
-      },
-      "material": {
-        "type": "wood",
-        "color_rgb": [
-          0.73,
-          0.56,
-          0.38
-        ],
-        "metallic": 0,
-        "roughness": 0.7
-      },
-      "is_separate_object": false,
-      "pivot": "N/A fixed",
-      "parent": "main_frame",
-      "cavity_face_delete": false,
-      "behavior": {
-        "behavior_type": "CONTACT_BASED",
-        "active_constraints": {}
-      },
-      "b_match": null,
-      "position_xyz": [
-        -0.1788,
-        0.0,
-        0.7
-      ]
-    },
-    {
-      "part": "drawer_divider_2",
-      "geometry": "box",
-      "dims_mm": {
-        "width": 20.0,
-        "depth": 550,
-        "height": 180.0
-      },
-      "dims_reconciled": {
-        "width_mm": 20.0,
-        "depth_mm": 550,
-        "height_mm": 180.0
-      },
-      "dims_source": {
-        "width": "inferred",
-        "depth": "inferred",
-        "height": "inferred"
-      },
-      "material": {
-        "type": "wood",
-        "color_rgb": [
-          0.73,
-          0.56,
-          0.38
-        ],
-        "metallic": 0,
-        "roughness": 0.7
-      },
-      "is_separate_object": false,
-      "pivot": "N/A fixed",
-      "parent": "main_frame",
-      "cavity_face_delete": false,
-      "behavior": {
-        "behavior_type": "CONTACT_BASED",
-        "active_constraints": {}
-      },
-      "b_match": null,
-      "position_xyz": [
-        0.2276,
-        0.0,
-        0.7
-      ]
+      }
     }
-  ],
-  "meta": {
-    "conflicts": [],
-    "contract_errors": [],
-    "b_overall": {
-      "total_width_mm": 1270.7,
-      "total_height_mm": 1050.9
-    },
-    "b_row_ratios": {
-      "door_ratio": 0.73,
-      "drawer_ratio": 0.27
-    },
-    "b_part_counts": {
-      "top surface": 1,
-      "drawer middle drawer handle": 1,
-      "main frame top": 1,
-      "door middle door right door": 2,
-      "drawer middle drawer right drawer": 3,
-      "drawer middle drawer": 2,
-      "drawer door right door": 1
-    }
-  }
+  ]
 }

@@ -1,0 +1,324 @@
+{
+  "components": [
+    {
+      "label": "top surface",
+      "dino_confidence": 0.3414,
+      "pixel_bbox": [
+        14,
+        25,
+        650,
+        153
+      ],
+      "pixel_width": 636,
+      "pixel_height": 128,
+      "sam3_label": "top surface",
+      "sam3_iou": 0.382,
+      "confirmed": true,
+      "depth_m": 1.9932,
+      "measured_width_mm": 1270.7,
+      "measured_height_mm": 255.7,
+      "b_confidence": 0.44,
+      "da_relative_depth": 0.8806,
+      "sampled_rgb": [
+        0.743,
+        0.567,
+        0.367
+      ]
+    },
+    {
+      "label": "drawer middle drawer handle",
+      "dino_confidence": 0.3484,
+      "pixel_bbox": [
+        240,
+        191,
+        299,
+        218
+      ],
+      "pixel_width": 59,
+      "pixel_height": 27,
+      "sam3_label": "handle",
+      "sam3_iou": 0.248,
+      "confirmed": true,
+      "depth_m": 1.6737,
+      "measured_width_mm": 99.0,
+      "measured_height_mm": 45.3,
+      "b_confidence": 0.45,
+      "da_relative_depth": 0.8452,
+      "sampled_rgb": [
+        0.741,
+        0.554,
+        0.388
+      ]
+    },
+    {
+      "label": "main frame top",
+      "dino_confidence": 0.4242,
+      "pixel_bbox": [
+        287,
+        1,
+        603,
+        79
+      ],
+      "pixel_width": 316,
+      "pixel_height": 78,
+      "confirmed": true,
+      "depth_m": 2.107,
+      "measured_width_mm": 667.4,
+      "measured_height_mm": 164.7,
+      "b_confidence": 0.52,
+      "da_relative_depth": 0.9903,
+      "sampled_rgb": [
+        0.655,
+        0.532,
+        0.404
+      ]
+    },
+    {
+      "label": "door middle door right door",
+      "dino_confidence": 0.3727,
+      "pixel_bbox": [
+        164,
+        231,
+        347,
+        527
+      ],
+      "pixel_width": 183,
+      "pixel_height": 296,
+      "sam3_label": "right drawer",
+      "sam3_iou": 0.783,
+      "confirmed": true,
+      "depth_m": 1.7206,
+      "measured_width_mm": 315.6,
+      "measured_height_mm": 510.5,
+      "b_confidence": 0.47,
+      "da_relative_depth": 0.8914,
+      "sampled_rgb": [
+        0.81,
+        0.585,
+        0.383
+      ]
+    },
+    {
+      "label": "drawer middle drawer right drawer",
+      "dino_confidence": 0.3442,
+      "pixel_bbox": [
+        162,
+        132,
+        349,
+        269
+      ],
+      "pixel_width": 187,
+      "pixel_height": 137,
+      "sam3_label": "right drawer",
+      "sam3_iou": 0.749,
+      "confirmed": true,
+      "depth_m": 1.6647,
+      "measured_width_mm": 312.0,
+      "measured_height_mm": 228.6,
+      "b_confidence": 0.44,
+      "da_relative_depth": 0.8393,
+      "sampled_rgb": [
+        0.806,
+        0.576,
+        0.364
+      ]
+    },
+    {
+      "label": "drawer middle drawer",
+      "dino_confidence": 0.3126,
+      "pixel_bbox": [
+        411,
+        156,
+        461,
+        182
+      ],
+      "pixel_width": 50,
+      "pixel_height": 26,
+      "sam3_label": "handle",
+      "sam3_iou": 0.238,
+      "confirmed": true,
+      "depth_m": 1.8936,
+      "measured_width_mm": 94.9,
+      "measured_height_mm": 49.4,
+      "b_confidence": 0.41,
+      "da_relative_depth": 0.9391,
+      "sampled_rgb": [
+        0.754,
+        0.564,
+        0.391
+      ]
+    },
+    {
+      "label": "drawer middle drawer",
+      "dino_confidence": 0.31,
+      "pixel_bbox": [
+        548,
+        127,
+        593,
+        151
+      ],
+      "pixel_width": 45,
+      "pixel_height": 24,
+      "sam3_label": "handle",
+      "sam3_iou": 0.26,
+      "confirmed": true,
+      "depth_m": 2.1229,
+      "measured_width_mm": 95.8,
+      "measured_height_mm": 51.1,
+      "b_confidence": 0.41,
+      "da_relative_depth": 1.0353,
+      "sampled_rgb": [
+        0.797,
+        0.588,
+        0.426
+      ]
+    },
+    {
+      "label": "drawer middle drawer right drawer",
+      "dino_confidence": 0.3229,
+      "pixel_bbox": [
+        349,
+        103,
+        498,
+        227
+      ],
+      "pixel_width": 149,
+      "pixel_height": 124,
+      "sam3_label": "left drawer",
+      "sam3_iou": 0.75,
+      "confirmed": true,
+      "depth_m": 1.8787,
+      "measured_width_mm": 280.6,
+      "measured_height_mm": 233.5,
+      "b_confidence": 0.42,
+      "da_relative_depth": 0.9294,
+      "sampled_rgb": [
+        0.819,
+        0.589,
+        0.378
+      ]
+    },
+    {
+      "label": "door middle door right door",
+      "dino_confidence": 0.3518,
+      "pixel_bbox": [
+        344,
+        196,
+        494,
+        458
+      ],
+      "pixel_width": 150,
+      "pixel_height": 262,
+      "sam3_label": "right drawer",
+      "sam3_iou": 0.785,
+      "confirmed": true,
+      "depth_m": 1.9326,
+      "measured_width_mm": 290.6,
+      "measured_height_mm": 507.5,
+      "b_confidence": 0.45,
+      "da_relative_depth": 0.9862,
+      "sampled_rgb": [
+        0.819,
+        0.585,
+        0.386
+      ]
+    },
+    {
+      "label": "drawer middle drawer right drawer",
+      "dino_confidence": 0.3374,
+      "pixel_bbox": [
+        499,
+        80,
+        621,
+        190
+      ],
+      "pixel_width": 122,
+      "pixel_height": 110,
+      "sam3_label": "cabinet door",
+      "sam3_iou": 0.77,
+      "confirmed": true,
+      "depth_m": 2.1114,
+      "measured_width_mm": 258.2,
+      "measured_height_mm": 232.8,
+      "b_confidence": 0.44,
+      "da_relative_depth": 1.0271,
+      "sampled_rgb": [
+        0.845,
+        0.596,
+        0.397
+      ]
+    },
+    {
+      "label": "drawer door right door",
+      "dino_confidence": 0.2605,
+      "pixel_bbox": [
+        490,
+        164,
+        617,
+        403
+      ],
+      "pixel_width": 127,
+      "pixel_height": 239,
+      "sam3_label": "right drawer",
+      "sam3_iou": 0.776,
+      "confirmed": true,
+      "depth_m": 2.1507,
+      "measured_width_mm": 273.8,
+      "measured_height_mm": 515.2,
+      "b_confidence": 0.36,
+      "da_relative_depth": 1.0859,
+      "sampled_rgb": [
+        0.841,
+        0.593,
+        0.396
+      ]
+    },
+    {
+      "label": "door middle door right door",
+      "dino_confidence": 0.2897,
+      "pixel_bbox": [
+        33,
+        201,
+        121,
+        532
+      ],
+      "pixel_width": 88,
+      "pixel_height": 331,
+      "confirmed": false,
+      "depth_m": 1.8489,
+      "measured_width_mm": 163.1,
+      "measured_height_mm": 613.4,
+      "b_confidence": 0.39,
+      "da_relative_depth": 0.9475,
+      "sampled_rgb": [
+        0.653,
+        0.469,
+        0.295
+      ]
+    }
+  ],
+  "confirmed_count": 11,
+  "part_counts": {
+    "top surface": 1,
+    "drawer middle drawer handle": 1,
+    "main frame top": 1,
+    "door middle door right door": 2,
+    "drawer middle drawer right drawer": 3,
+    "drawer middle drawer": 2,
+    "drawer door right door": 1
+  },
+  "overall_dims": {
+    "total_width_mm": 1270.7,
+    "total_height_mm": 1050.9
+  },
+  "row_ratios": {
+    "door_ratio": 0.73,
+    "drawer_ratio": 0.27
+  },
+  "model_status": {
+    "dino": "success",
+    "sam3": "success",
+    "depth_pro": "success",
+    "depth_anything": "success"
+  }
+}
