@@ -1,0 +1,22 @@
+{
+  "gemini": {
+    "api_key": "YOUR_GEMINI_API_KEY",
+    "model": "gemini-3.1-pro-preview",
+    "role": "Critique 1: Physics & ISO Data Auditor"
+  },
+  "fireworks": {
+    "api_key": "YOUR_FIREWORKS_API_KEY",
+    "model": "accounts/fireworks/models/deepseek-v3",
+    "role": "Critique 2: Code & Geometry Reviewer"
+  },
+  "manus": {
+    "api_key": "YOUR_MANUS_API_KEY",
+    "base_url": "https://api.manus.ai",
+    "role": "Research Agent: Object specifications, assembly details, design validation"
+  },
+  "anthropic": {
+    "api_key": "YOUR_ANTHROPIC_API_KEY",
+    "model": "claude-opus-4-6",
+    "role": "Physics Reasoning: Hardware inference, mechanism design, engineering computation"
+  }
+}

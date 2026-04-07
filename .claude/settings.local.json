@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /home/msi/IsaacLab -name \"*.py\" -type f -exec grep -l \"cabinet\\\\|drawer\\\\|door\" {})",
+      "Bash(curl -s \"https://simready.s3.us-east-1.amazonaws.com/index.json\")",
+      "Bash(gh repo:*)"
+    ]
+  },
+  "mcpServers": {
+    "blender": {
+      "command": "/home/msi/.local/bin/uvx",
+      "args": [
+        "blender-mcp"
+      ]
+    }
+  }
+}
