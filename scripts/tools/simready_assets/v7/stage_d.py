@@ -234,12 +234,19 @@ def _part_code(p: dict) -> str:
 
 def _parent_block(parts: list) -> str:
     code = "\n    # ── Parent assignments ──────────────────────────────────────"
+    code += """
+    # matrix_parent_inverse keeps child's WORLD position unchanged after parenting.
+    # Without it, Blender reinterprets the child's world coords as local-to-parent,
+    # compounding the parent's transform and placing the child at the wrong location."""
     for p in parts:
         parent = p.get("parent", "")
         if parent and parent not in ("none", None, ""):
             code += f"""
     if "{p['part']}" in bpy.data.objects and "{parent}" in bpy.data.objects:
-        bpy.data.objects["{p['part']}"].parent = bpy.data.objects["{parent}"]"""
+        _child  = bpy.data.objects["{p['part']}"]
+        _parent = bpy.data.objects["{parent}"]
+        _child.parent = _parent
+        _child.matrix_parent_inverse = _parent.matrix_world.inverted()"""
     return code
 
 
