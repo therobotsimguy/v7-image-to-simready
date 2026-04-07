@@ -1,0 +1,1036 @@
+{
+  "object": {
+    "type": "teak sideboard cabinet",
+    "category": "furniture",
+    "articulation": "ARTICULATED",
+    "overall_dims_mm": {
+      "width": 1500,
+      "depth": 500,
+      "height": 900
+    }
+  },
+  "parts": [
+    {
+      "part": "cabinet_body",
+      "geometry": "box with four legs and openings for drawers and doors",
+      "dims_mm": {
+        "width": 1460,
+        "depth": 480,
+        "height": 900
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "none",
+      "cavity_face_delete": true,
+      "behavior": {
+        "part": "cabinet_body",
+        "behavior_type": "CONTACT_BASED",
+        "interaction": {
+          "initiated_by": "gravity",
+          "action": "none",
+          "return": "static"
+        },
+        "active_constraints": {
+          "directional": "The cabinet body rests stationary on the ground surface, resisting vertical displacement through ground contact.",
+          "material": "Solid teak or oak wood construction provides structural rigidity to support all mounted components.",
+          "internal_volume": "The cabinet body encloses storage compartments accessed via doors and drawers.",
+          "safety": "The cabinet must remain stable and not tip over during interaction with doors and drawers."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the cabinet body is a fixed base structure and does not rotate",
+          "LINEAR_TRANSLATIONAL \u2014 the cabinet is not designed to slide or translate during normal use",
+          "DEFORMATION \u2014 solid wood construction resists deformation under normal loads"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 1460,
+        "depth_mm": 480,
+        "height_mm": 900
+      },
+      "dims_source": {
+        "width": "A_only",
+        "depth": "A_only",
+        "height": "A_only"
+      },
+      "b_match": null,
+      "position_xyz": [
+        0.0,
+        0.0,
+        0.45
+      ]
+    },
+    {
+      "part": "top_panel",
+      "geometry": "box",
+      "dims_mm": {
+        "width": 1500,
+        "depth": 500,
+        "height": 30
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "top_panel",
+        "behavior_type": "CONTACT_BASED",
+        "interaction": {
+          "initiated_by": "none",
+          "action": "none",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The top panel is solid wood, providing a flat durable surface for placing items.",
+          "contact_friction": "Surface friction keeps placed items from sliding off under normal conditions.",
+          "safety": "The top panel must support the weight of items placed on it without bowing or breaking."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the top panel is fixed to the cabinet body",
+          "LINEAR_TRANSLATIONAL \u2014 the top panel does not slide or translate",
+          "DEFORMATION \u2014 solid wood top resists deformation under normal use loads"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 1500,
+        "depth_mm": 500,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "top panel",
+      "position_xyz": [
+        0.0,
+        0.0,
+        0.915
+      ]
+    },
+    {
+      "part": "left_drawer",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 690,
+        "depth": 450,
+        "height": 180
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "center prismatic depth axis",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "left_drawer",
+        "behavior_type": "LINEAR_TRANSLATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The left drawer translates linearly along the forward-backward axis only.",
+          "range_limits": "The drawer extends to a maximum stop and cannot be pulled beyond full extension or pushed past flush closed position.",
+          "clearance": "The drawer requires clearance in front of the cabinet to fully open without obstruction.",
+          "contact_friction": "Drawer slides on wooden or metal runners creating friction that holds it in partially open positions.",
+          "internal_volume": "The drawer provides enclosed storage volume accessible only when pulled open.",
+          "kinematic_chain": "The drawer handle initiates the pull force that translates through the drawer face to the drawer box."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 drawers translate linearly and do not rotate",
+          "DEFORMATION \u2014 the rigid wood drawer does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 690,
+        "depth_mm": 450,
+        "height_mm": 180
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "drawer middle drawer handle",
+      "position_xyz": [
+        -0.4504,
+        0.015,
+        0.73
+      ]
+    },
+    {
+      "part": "middle_drawer",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 330,
+        "depth": 450,
+        "height": 180
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "center prismatic depth axis",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "middle_drawer",
+        "behavior_type": "LINEAR_TRANSLATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The middle drawer translates linearly along the forward-backward axis only.",
+          "range_limits": "The drawer extends to a maximum stop and cannot be pulled beyond full extension or pushed past flush closed position.",
+          "clearance": "The drawer requires clearance in front of the cabinet to fully open without obstruction.",
+          "contact_friction": "Drawer slides on wooden or metal runners creating friction that holds it in partially open positions.",
+          "internal_volume": "The drawer provides enclosed storage volume accessible only when pulled open.",
+          "symmetry": "The middle drawer is centered between the left and right drawers for visual and functional symmetry."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 drawers translate linearly and do not rotate",
+          "DEFORMATION \u2014 the rigid wood drawer does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 330,
+        "depth_mm": 450,
+        "height_mm": 180
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.0,
+        0.015,
+        0.73
+      ]
+    },
+    {
+      "part": "right_drawer",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 330,
+        "depth": 450,
+        "height": 180
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "center prismatic depth axis",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "right_drawer",
+        "behavior_type": "LINEAR_TRANSLATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The right drawer translates linearly along the forward-backward axis only.",
+          "range_limits": "The drawer extends to a maximum stop and cannot be pulled beyond full extension or pushed past flush closed position.",
+          "clearance": "The drawer requires clearance in front of the cabinet to fully open without obstruction.",
+          "contact_friction": "Drawer slides on wooden or metal runners creating friction that holds it in partially open positions.",
+          "internal_volume": "The drawer provides enclosed storage volume accessible only when pulled open.",
+          "kinematic_chain": "The drawer handle initiates the pull force that translates through the drawer face to the drawer box."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 drawers translate linearly and do not rotate",
+          "DEFORMATION \u2014 the rigid wood drawer does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 330,
+        "depth_mm": 450,
+        "height_mm": 180
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        0.4504,
+        0.015,
+        0.73
+      ]
+    },
+    {
+      "part": "left_door",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 690,
+        "depth": 25,
+        "height": 600
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "left edge hinge",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "left_door",
+        "behavior_type": "ROTATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The left door swings outward around a vertical hinge axis on its left edge.",
+          "range_limits": "The door opens from 0 degrees (closed) to approximately 110 degrees maximum opening angle.",
+          "pivot_placement": "Hinges are mounted along the left vertical edge of the door panel.",
+          "clearance": "The door requires clearance in front and to the left to swing open without hitting adjacent objects.",
+          "contact_friction": "Hinge friction allows the door to remain in partially open positions.",
+          "kinematic_chain": "The door knob provides the grip point, transferring pulling force to rotate the door around its hinge axis."
+        },
+        "invalid_behaviors": [
+          "LINEAR_TRANSLATIONAL \u2014 the door rotates on hinges and does not slide",
+          "DEFORMATION \u2014 the solid wood door panel does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 690,
+        "depth_mm": 25,
+        "height_mm": 600
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.4504,
+        0.2275,
+        0.32
+      ]
+    },
+    {
+      "part": "middle_door",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 330,
+        "depth": 25,
+        "height": 600
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "left edge hinge",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "middle_door",
+        "behavior_type": "ROTATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The middle door swings outward around a vertical hinge axis on one of its side edges.",
+          "range_limits": "The door opens from 0 degrees (closed) to approximately 110 degrees maximum opening angle.",
+          "pivot_placement": "Hinges are mounted along one vertical edge of the middle door panel.",
+          "clearance": "The middle door requires clearance to open fully and must not collide with adjacent left or right doors when they are also open.",
+          "kinematic_chain": "The door knob provides the grip point, transferring pulling force to rotate the door around its hinge axis.",
+          "symmetry": "The middle door is centered in the cabinet for visual balance."
+        },
+        "invalid_behaviors": [
+          "LINEAR_TRANSLATIONAL \u2014 the door rotates on hinges and does not slide",
+          "DEFORMATION \u2014 the solid wood door panel does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 330,
+        "depth_mm": 25,
+        "height_mm": 600
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.0,
+        0.2275,
+        0.32
+      ]
+    },
+    {
+      "part": "right_door",
+      "geometry": "box with shaker-style front panel",
+      "dims_mm": {
+        "width": 330,
+        "depth": 25,
+        "height": 600
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": true,
+      "pivot": "right edge hinge",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "right_door",
+        "behavior_type": "ROTATIONAL",
+        "interaction": {
+          "initiated_by": "handle",
+          "action": "pull",
+          "return": "push back"
+        },
+        "active_constraints": {
+          "directional": "The right door swings outward around a vertical hinge axis on its right edge.",
+          "range_limits": "The door opens from 0 degrees (closed) to approximately 110 degrees maximum opening angle.",
+          "pivot_placement": "Hinges are mounted along the right vertical edge of the door panel.",
+          "clearance": "The door requires clearance in front and to the right to swing open without hitting adjacent objects.",
+          "contact_friction": "Hinge friction allows the door to remain in partially open positions.",
+          "kinematic_chain": "The door knob provides the grip point, transferring pulling force to rotate the door around its hinge axis."
+        },
+        "invalid_behaviors": [
+          "LINEAR_TRANSLATIONAL \u2014 the door rotates on hinges and does not slide",
+          "DEFORMATION \u2014 the solid wood door panel does not deform during operation"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 330,
+        "depth_mm": 25,
+        "height_mm": 600
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        0.4504,
+        0.2275,
+        0.32
+      ]
+    },
+    {
+      "part": "left_drawer_handle",
+      "geometry": "bar handle",
+      "dims_mm": {
+        "width": 150,
+        "depth": 30,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "left_drawer",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "left_drawer_handle",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The brushed metal handle provides a rigid and durable grip surface.",
+          "contact_friction": "The metal surface provides sufficient friction for fingers to grip and pull without slipping.",
+          "kinematic_chain": "Grasping the handle transfers pull force to the left drawer, initiating its linear translation.",
+          "clearance": "The handle protrudes sufficiently from the drawer face to allow comfortable finger insertion behind it.",
+          "feedback": "Tactile feedback from gripping the handle confirms secure contact before pulling."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the handle is rigidly fixed and does not rotate independently",
+          "DEFORMATION \u2014 the metal handle does not deform under normal grip force"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 150,
+        "depth_mm": 30,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "drawer middle drawer handle",
+      "position_xyz": [
+        -0.4504,
+        0.255,
+        0.73
+      ]
+    },
+    {
+      "part": "middle_drawer_handle",
+      "geometry": "bar handle",
+      "dims_mm": {
+        "width": 150,
+        "depth": 30,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "middle_drawer",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "middle_drawer_handle",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The brushed metal handle provides a rigid and durable grip surface.",
+          "contact_friction": "The metal surface provides sufficient friction for fingers to grip and pull without slipping.",
+          "kinematic_chain": "Grasping the handle transfers pull force to the middle drawer, initiating its linear translation.",
+          "clearance": "The handle protrudes sufficiently from the drawer face to allow comfortable finger insertion behind it.",
+          "feedback": "Tactile feedback from gripping the handle confirms secure contact before pulling."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the handle is rigidly fixed and does not rotate independently",
+          "DEFORMATION \u2014 the metal handle does not deform under normal grip force"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 150,
+        "depth_mm": 30,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.0,
+        0.255,
+        0.73
+      ]
+    },
+    {
+      "part": "right_drawer_handle",
+      "geometry": "bar handle",
+      "dims_mm": {
+        "width": 150,
+        "depth": 30,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "right_drawer",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "right_drawer_handle",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The brushed metal handle provides a rigid and durable grip surface.",
+          "contact_friction": "The metal surface provides sufficient friction for fingers to grip and pull without slipping.",
+          "kinematic_chain": "Grasping the handle transfers pull force to the right drawer, initiating its linear translation.",
+          "clearance": "The handle protrudes sufficiently from the drawer face to allow comfortable finger insertion behind it.",
+          "feedback": "Tactile feedback from gripping the handle confirms secure contact before pulling."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the handle is rigidly fixed and does not rotate independently",
+          "DEFORMATION \u2014 the metal handle does not deform under normal grip force"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 150,
+        "depth_mm": 30,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        0.4504,
+        0.255,
+        0.73
+      ]
+    },
+    {
+      "part": "left_door_knob",
+      "geometry": "knob shape",
+      "dims_mm": {
+        "width": 30,
+        "depth": 25,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "left_door",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "left_door_knob",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The metal knob provides a small rigid grip point for fingers.",
+          "contact_friction": "The smooth metal knob surface allows pinch grip with sufficient friction to pull the door open.",
+          "kinematic_chain": "Grasping the knob transfers pull force to the left door, initiating its rotational opening.",
+          "clearance": "The knob protrudes enough from the door surface for fingertips to grasp securely.",
+          "feedback": "Tactile feedback confirms grip engagement before applying pull force."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the knob is a fixed pull type and does not rotate independently",
+          "LINEAR_TRANSLATIONAL \u2014 the knob does not translate; it is rigidly attached to the door"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 30,
+        "depth_mm": 25,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.4504,
+        0.2525,
+        0.32
+      ]
+    },
+    {
+      "part": "middle_door_knob",
+      "geometry": "knob shape",
+      "dims_mm": {
+        "width": 30,
+        "depth": 25,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "middle_door",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "middle_door_knob",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The metal knob provides a small rigid grip point for fingers.",
+          "contact_friction": "The smooth metal knob surface allows pinch grip with sufficient friction to pull the door open.",
+          "kinematic_chain": "Grasping the knob transfers pull force to the middle door, initiating its rotational opening.",
+          "clearance": "The knob protrudes enough from the door surface for fingertips to grasp securely.",
+          "feedback": "Tactile feedback confirms grip engagement before applying pull force."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the knob is a fixed pull type and does not rotate independently",
+          "LINEAR_TRANSLATIONAL \u2014 the knob does not translate; it is rigidly attached to the door"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 30,
+        "depth_mm": 25,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        -0.0,
+        0.2525,
+        0.32
+      ]
+    },
+    {
+      "part": "right_door_knob",
+      "geometry": "knob shape",
+      "dims_mm": {
+        "width": 30,
+        "depth": 25,
+        "height": 30
+      },
+      "material": {
+        "type": "metal",
+        "color_rgb": [
+          0.75,
+          0.75,
+          0.75
+        ],
+        "metallic": 1,
+        "roughness": 0.4
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "right_door",
+      "cavity_face_delete": false,
+      "behavior": {
+        "part": "right_door_knob",
+        "behavior_type": "GRASPING",
+        "interaction": {
+          "initiated_by": "finger",
+          "action": "grip",
+          "return": "static"
+        },
+        "active_constraints": {
+          "material": "The metal knob provides a small rigid grip point for fingers.",
+          "contact_friction": "The smooth metal knob surface allows pinch grip with sufficient friction to pull the door open.",
+          "kinematic_chain": "Grasping the knob transfers pull force to the right door, initiating its rotational opening.",
+          "clearance": "The knob protrudes enough from the door surface for fingertips to grasp securely.",
+          "feedback": "Tactile feedback confirms grip engagement before applying pull force."
+        },
+        "invalid_behaviors": [
+          "ROTATIONAL \u2014 the knob is a fixed pull type and does not rotate independently",
+          "LINEAR_TRANSLATIONAL \u2014 the knob does not translate; it is rigidly attached to the door"
+        ]
+      },
+      "dims_reconciled": {
+        "width_mm": 30,
+        "depth_mm": 25,
+        "height_mm": 30
+      },
+      "dims_source": {
+        "width": "A_low_b_conf",
+        "depth": "A_only",
+        "height": "A_low_b_conf"
+      },
+      "b_match": "door middle door right door",
+      "position_xyz": [
+        0.4504,
+        0.2525,
+        0.32
+      ]
+    },
+    {
+      "part": "door_divider_1",
+      "geometry": "box",
+      "dims_mm": {
+        "width": 20.0,
+        "depth": 480,
+        "height": 600.0
+      },
+      "dims_reconciled": {
+        "width_mm": 20.0,
+        "depth_mm": 480,
+        "height_mm": 600.0
+      },
+      "dims_source": {
+        "width": "inferred",
+        "depth": "inferred",
+        "height": "inferred"
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "behavior_type": "CONTACT_BASED",
+        "active_constraints": {}
+      },
+      "b_match": null,
+      "position_xyz": [
+        -0.1352,
+        0.0,
+        0.32
+      ]
+    },
+    {
+      "part": "door_divider_2",
+      "geometry": "box",
+      "dims_mm": {
+        "width": 20.0,
+        "depth": 480,
+        "height": 600.0
+      },
+      "dims_reconciled": {
+        "width_mm": 20.0,
+        "depth_mm": 480,
+        "height_mm": 600.0
+      },
+      "dims_source": {
+        "width": "inferred",
+        "depth": "inferred",
+        "height": "inferred"
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "behavior_type": "CONTACT_BASED",
+        "active_constraints": {}
+      },
+      "b_match": null,
+      "position_xyz": [
+        0.2252,
+        0.0,
+        0.32
+      ]
+    },
+    {
+      "part": "drawer_divider_1",
+      "geometry": "box",
+      "dims_mm": {
+        "width": 20.0,
+        "depth": 480,
+        "height": 180.0
+      },
+      "dims_reconciled": {
+        "width_mm": 20.0,
+        "depth_mm": 480,
+        "height_mm": 180.0
+      },
+      "dims_source": {
+        "width": "inferred",
+        "depth": "inferred",
+        "height": "inferred"
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "behavior_type": "CONTACT_BASED",
+        "active_constraints": {}
+      },
+      "b_match": null,
+      "position_xyz": [
+        -0.1352,
+        0.0,
+        0.73
+      ]
+    },
+    {
+      "part": "drawer_divider_2",
+      "geometry": "box",
+      "dims_mm": {
+        "width": 20.0,
+        "depth": 480,
+        "height": 180.0
+      },
+      "dims_reconciled": {
+        "width_mm": 20.0,
+        "depth_mm": 480,
+        "height_mm": 180.0
+      },
+      "dims_source": {
+        "width": "inferred",
+        "depth": "inferred",
+        "height": "inferred"
+      },
+      "material": {
+        "type": "wood",
+        "color_rgb": [
+          0.658,
+          0.521,
+          0.368
+        ],
+        "metallic": 0,
+        "roughness": 0.7
+      },
+      "is_separate_object": false,
+      "pivot": "N/A fixed",
+      "parent": "cabinet_body",
+      "cavity_face_delete": false,
+      "behavior": {
+        "behavior_type": "CONTACT_BASED",
+        "active_constraints": {}
+      },
+      "b_match": null,
+      "position_xyz": [
+        0.2252,
+        0.0,
+        0.73
+      ]
+    }
+  ],
+  "meta": {
+    "conflicts": [],
+    "contract_errors": [],
+    "b_overall": {
+      "total_width_mm": 1282.2,
+      "total_height_mm": 1049.1
+    },
+    "b_row_ratios": {
+      "door_ratio": 0.781,
+      "drawer_ratio": 0.219
+    },
+    "b_part_counts": {
+      "top panel": 2,
+      "door middle door right door": 3,
+      "drawer middle drawer handle": 1,
+      "drawer middle drawer right drawer": 3,
+      "drawer middle drawer": 2
+    }
+  }
+}
