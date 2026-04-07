@@ -367,12 +367,29 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
     else:
         print(f"  [F3] RIGID — skipping ArticulationRootAPI")
 
+    # Build parent lookup for depth detection
+    part_map = {p["part"]: p for p in parts}
+
+    def _is_direct_child_of_root(p):
+        """True if p's parent is the root (depth=1 in articulation tree)."""
+        parent_name = p.get("parent", "")
+        if parent_name in ("none", None, ""):
+            return False  # this IS root
+        parent = part_map.get(parent_name, {})
+        return parent.get("parent") in ("none", None, "")
+
+    def _is_root(p):
+        return p.get("parent") in ("none", None, "")
+
     # ── Step 4: RigidBodyAPI + CollisionAPI + MassAPI per part ───────
+    # PhysX rule: NO nested RigidBodyAPIs in hierarchy.
+    # Only root (ArticulationRootAPI, no RigidBody) and direct children of root
+    # (RigidBodyAPI) are valid articulation links.
+    # Grandchildren (handles, knobs) — skip RigidBodyAPI, pure visual geometry.
     print(f"\n  [F4] Rigid bodies + collision + mass:")
     for p in parts:
         name      = p["part"]
         dims      = p["dims_reconciled"]
-        is_root   = p.get("parent") in ("none", None, "")
         xform_path = _find_part_xform(stage, name)
         if not xform_path:
             print(f"    ✗ Xform not found: {name}")
@@ -380,10 +397,16 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
 
         mass = _estimate_mass(name, dims)
 
-        # RigidBodyAPI: skip root body — ArticulationRootAPI alone marks it as fixed base.
-        # Adding RigidBodyAPI to root makes the entire articulation float freely.
-        if not is_root:
+        if _is_root(p):
+            # Root: ArticulationRootAPI only — no RigidBodyAPI (fixed base)
+            pass
+        elif _is_direct_child_of_root(p):
+            # Direct articulation link — gets RigidBodyAPI
             _apply_rigid_body(stage, xform_path)
+        else:
+            # Grandchild (handle, knob) — skip RigidBodyAPI to avoid nested rigid body error
+            print(f"    (skip RigidBody — grandchild) {name}")
+            pass
 
         # CollisionAPI on each Mesh child
         mesh_paths = _find_mesh_children(stage, xform_path)
@@ -404,8 +427,12 @@ def run_stage_f(spec: dict, input_usd: str, output_dir: str) -> dict:
             UsdGeom.Scope.Define(stage, Sdf.Path(joints_scope_path))
 
         for p in parts:
-            if p.get("parent") not in ("none", None, ""):
-                _dispatch_joint(stage, p, joints_scope_path, root_path)
+            if p.get("parent") in ("none", None, ""):
+                continue
+            if not _is_direct_child_of_root(p):
+                # Grandchildren have no RigidBodyAPI — skip joint entirely
+                continue
+            _dispatch_joint(stage, p, joints_scope_path, root_path)
     else:
         print(f"\n  [F5] RIGID — no joints")
 
