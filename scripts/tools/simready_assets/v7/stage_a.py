@@ -30,10 +30,11 @@ def load_api_keys():
     with open(path) as f:
         return json.load(f)
 
-def call_gemini(api_key, prompt, image_path):
+def call_gemini(api_key, prompt, image_path, model: str | None = None):
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=api_key)
+    model = model or BEST_GEMINI
     with open(image_path, "rb") as f:
         data = f.read()
     import mimetypes
@@ -43,21 +44,22 @@ def call_gemini(api_key, prompt, image_path):
         prompt,
     ]
     resp = client.models.generate_content(
-        model=BEST_GEMINI, contents=contents,
+        model=model, contents=contents,
         config=types.GenerateContentConfig(max_output_tokens=32768, temperature=0.1),
     )
     return resp.text
 
-def call_claude(api_key, prompt, image_path):
+def call_claude(api_key, prompt, image_path, model: str | None = None):
     import anthropic
     import base64
     import mimetypes
     client = anthropic.Anthropic(api_key=api_key)
+    model = model or BEST_CLAUDE
     with open(image_path, "rb") as f:
         b64 = base64.standard_b64encode(f.read()).decode()
     mime = mimetypes.guess_type(image_path)[0] or "image/png"
     resp = client.messages.create(
-        model=BEST_CLAUDE,
+        model=model,
         max_tokens=16384,
         messages=[{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}},
@@ -185,6 +187,37 @@ def merge(gemini_output: dict, claude_behaviors: list) -> dict:
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
 
+def run_stage_a_from_merged_json(merged_json_path: str, output_path: str | None = None) -> dict | None:
+    """Skip Gemini/Claude API calls. Load a merged Stage A spec (e.g. authored in Cursor chat)."""
+    t0 = time.time()
+    print(f"\n{'='*60}")
+    print(f"  STAGE A — from file (no external LLM API)")
+    print(f"  Input: {merged_json_path}")
+    print(f"{'='*60}")
+
+    with open(merged_json_path) as f:
+        spec = json.load(f)
+
+    if "object" not in spec or "parts" not in spec:
+        print("  ✗ Invalid spec: missing 'object' or 'parts'")
+        return None
+
+    for p in spec["parts"]:
+        if "behavior" not in p:
+            print(f"  ⚠ Part '{p.get('part', '?')}' missing 'behavior' — Stage C may fail")
+
+    elapsed = time.time() - t0
+    print(f"\n  ✓ Loaded {len(spec['parts'])} parts — {elapsed:.2f}s")
+    print(f"{'='*60}")
+
+    if output_path:
+        with open(output_path, "w") as f:
+            json.dump(spec, f, indent=2)
+        print(f"  Saved: {output_path}")
+
+    return spec
+
+
 def run_stage_a(image_path: str, output_path: str = None) -> dict:
     t0 = time.time()
     print(f"\n{'='*60}")
@@ -195,6 +228,8 @@ def run_stage_a(image_path: str, output_path: str = None) -> dict:
     keys = load_api_keys()
     gkey = keys["gemini"]["api_key"]
     ckey = keys["anthropic"]["api_key"]
+    gmodel = keys["gemini"].get("model") or BEST_GEMINI
+    cmodel = keys["anthropic"].get("model") or BEST_CLAUDE
 
     results = {}
     errors = {}
@@ -203,7 +238,7 @@ def run_stage_a(image_path: str, output_path: str = None) -> dict:
     print(f"\n  [A1] Gemini — geometry analysis...")
     t1 = time.time()
     try:
-        raw = call_gemini(gkey, GEMINI_PROMPT, image_path)
+        raw = call_gemini(gkey, GEMINI_PROMPT, image_path, model=gmodel)
         results["gemini"] = parse_json(raw)
         print(f"  [A1] ✓ {len(results['gemini']['parts'])} parts found ({time.time()-t1:.1f}s)")
         for p in results["gemini"]["parts"]:
@@ -218,7 +253,7 @@ def run_stage_a(image_path: str, output_path: str = None) -> dict:
     t2 = time.time()
     claude_prompt = build_claude_prompt(results["gemini"]["parts"])
     try:
-        raw = call_claude(ckey, claude_prompt, image_path)
+        raw = call_claude(ckey, claude_prompt, image_path, model=cmodel)
         # parse array
         text = raw.strip()
         if "```json" in text:
@@ -255,17 +290,45 @@ def run_stage_a(image_path: str, output_path: str = None) -> dict:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image", required=True)
+    parser = argparse.ArgumentParser(
+        description="Stage A: LLM template filler, or --from_json to skip APIs (Cursor / hand-edited spec)."
+    )
+    parser.add_argument(
+        "--image",
+        default=None,
+        help="Input image (required unless --from_json)",
+    )
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--from_json",
+        default=None,
+        metavar="PATH",
+        help="Merged Stage A JSON (geometry + behavior per part). No Gemini/Anthropic calls.",
+    )
     args = parser.parse_args()
 
-    image = args.image
-    name = os.path.splitext(os.path.basename(image))[0]
-    out_dir = os.path.join(os.path.dirname(image), f"{name}_v7")
-    os.makedirs(out_dir, exist_ok=True)
-    output = args.output or os.path.join(out_dir, "stage_a.json")
+    if args.from_json:
+        src = os.path.abspath(args.from_json)
+        parent = os.path.dirname(src)
+        os.makedirs(parent, exist_ok=True)
+        output = args.output or os.path.join(parent, "stage_a.json")
+        if os.path.abspath(os.path.realpath(output)) == os.path.abspath(os.path.realpath(src)):
+            output = os.path.join(parent, "stage_a_from_file.json")
+            print(f"  (Output would overwrite input; writing to {output})")
+        spec = run_stage_a_from_merged_json(args.from_json, output)
+        if spec:
+            print(f"\n  Output: {output}")
+        else:
+            sys.exit(1)
+    else:
+        if not args.image:
+            parser.error("--image is required unless --from_json is set")
+        image = args.image
+        name = os.path.splitext(os.path.basename(image))[0]
+        out_dir = os.path.join(os.path.dirname(image), f"{name}_v7")
+        os.makedirs(out_dir, exist_ok=True)
+        output = args.output or os.path.join(out_dir, "stage_a.json")
 
-    spec = run_stage_a(image, output)
-    if spec:
-        print(f"\n  Output: {output}")
+        spec = run_stage_a(image, output)
+        if spec:
+            print(f"\n  Output: {output}")

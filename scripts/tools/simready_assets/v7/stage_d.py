@@ -116,13 +116,39 @@ def _box_part(p: dict) -> str:
     cavity = p.get("cavity_face_delete", False)
     btype = p.get("behavior", {}).get("behavior_type", "")
 
+    # For revolute/prismatic joints, create with origin AT the pivot so USD Xform
+    # translate = pivot world position. Vertices are offset so geometry appears at (x,y,z).
+    pivot_lower = pivot.lower()
+    if btype == "ROTATIONAL":
+        if "right" in pivot_lower:
+            ox = x + w/2   # right edge hinge
+            vx = -w/2      # vertex offset so mesh center is at x
+        else:
+            ox = x - w/2   # left edge hinge (default)
+            vx = w/2
+        create_loc = f"({ox}, {y}, {z})"
+        vertex_shift = f"v.co.x += {vx}"
+    elif btype == "LINEAR_TRANSLATIONAL":
+        oy = y - d/2       # back face = slide start
+        create_loc = f"({x}, {oy}, {z})"
+        vertex_shift = f"v.co.y += {d/2}"
+    else:
+        create_loc = f"({x}, {y}, {z})"
+        vertex_shift = None
+
     code = f"""
     # ── {name} ──────────────────────────────────────────────────
-    bpy.ops.mesh.primitive_cube_add(size=1, location=({x}, {y}, {z}))
+    bpy.ops.mesh.primitive_cube_add(size=1, location={create_loc})
     obj = bpy.context.active_object
     obj.name = "{name}"
     obj.scale = ({w}, {d}, {h})
     bpy.ops.object.transform_apply(scale=True)"""
+
+    if vertex_shift:
+        code += f"""
+    for v in obj.data.vertices:
+        {vertex_shift}
+    obj.data.update()"""
 
     # Cavity face deletion for body/chassis
     if cavity:
@@ -144,24 +170,8 @@ def _box_part(p: dict) -> str:
     # Material
     code += _mat_block(name, mat)
 
-    # Shift origin to joint pivot so USD exports Xform translate = pivot position.
-    # Physics body frame = pivot → localPos (0,0,0) works correctly in Isaac Sim.
-    pivot_lower = pivot.lower()
-    if btype == "ROTATIONAL":
-        # Door hinge: origin → left or right edge, vertically centered
-        if "right" in pivot_lower:
-            ox = f"{w/2}"   # right edge
-        else:
-            ox = f"-{w/2}"  # left edge (default)
-        code += f"""
-    # Shift origin to hinge edge (pivot for revolute joint)
-    set_origin_keep_visual(obj, {ox}, 0.0, 0.0)"""
-
-    elif btype == "LINEAR_TRANSLATIONAL":
-        # Drawer slide: origin → back face center (slide-start position)
-        code += f"""
-    # Shift origin to back face (pivot for prismatic joint)
-    set_origin_keep_visual(obj, 0.0, -{d/2}, 0.0)"""
+    # NOTE: For ROTATIONAL/LINEAR_TRANSLATIONAL, origin was pre-set at creation time
+    # by creating at pivot position and offsetting vertices. No post-creation shift needed.
 
     # Smooth shading
     code += f"""
@@ -417,8 +427,8 @@ if __name__ == "__main__":
 
     if args.dry_run:
         obj_name    = spec["object"]["type"].replace(" ", "_")
-        output_blend = os.path.join(out_dir, f"{obj_name}.blend")
-        output_usd   = os.path.join(out_dir, f"{obj_name}.usd")
+        output_blend = os.path.abspath(os.path.join(out_dir, f"{obj_name}.blend"))
+        output_usd   = os.path.abspath(os.path.join(out_dir, f"{obj_name}.usd"))
         script = build_script(spec, output_blend, output_usd)
         script_path = os.path.join(out_dir, "blender_script.py")
         with open(script_path, "w") as f:

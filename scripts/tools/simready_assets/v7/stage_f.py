@@ -243,19 +243,23 @@ def _dispatch_joint(
 
     if btype == "ROTATIONAL":
         # Revolute joint — door hinge along Z axis.
-        # Stage D moved the door's Blender origin to the hinge edge, so the USD
-        # Xform translate = hinge world position. Joint anchor = (0,0,0) in both
-        # body frames (origin IS the pivot).
+        # Stage D created door with origin AT the hinge (world position).
+        # localPos1 = (0,0,0) since door origin IS the hinge.
+        # localPos0 = hinge position in parent body's local frame = hinge_world - body_world.
         pivot_lower = pivot.lower()
         if "right" in pivot_lower:
             lower_deg, upper_deg = 0.0, 120.0
+            hinge_wx = cx + dims["width_mm"] / 1000 / 2
         else:
             lower_deg, upper_deg = -120.0, 0.0
+            hinge_wx = cx - dims["width_mm"] / 1000 / 2
 
-        # Read hinge position from USD Xform translate (set by Stage D)
-        hinge_t = _get_xform_translate(stage, part_path)
-        local_pos0 = Gf.Vec3f(hinge_t[0], hinge_t[1], hinge_t[2])
-        local_pos1 = Gf.Vec3f(0, 0, 0)  # origin = hinge
+        # Parent body world position (root body has no parent, its Xform = world pos)
+        parent_t = _get_xform_translate(stage, parent_path)
+        local_pos0 = Gf.Vec3f(hinge_wx - float(parent_t[0]),
+                               cy - float(parent_t[1]),
+                               cz - float(parent_t[2]))
+        local_pos1 = Gf.Vec3f(0, 0, 0)  # door origin IS the hinge
 
         _make_revolute_joint(
             stage, joint_path,
@@ -264,17 +268,21 @@ def _dispatch_joint(
             lower_deg, upper_deg,
             pivot_lower,
         )
-        print(f"    [F] RevoluteJoint  {name:<30s}  hinge={tuple(round(v,3) for v in hinge_t)}  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
+        print(f"    [F] RevoluteJoint  {name:<30s}  localPos0={tuple(round(v,3) for v in local_pos0)}  limits=[{lower_deg:.0f}°, {upper_deg:.0f}°]")
 
     elif btype == "LINEAR_TRANSLATIONAL":
         # Prismatic joint — drawer slides in +Y (out toward user).
-        # Stage D moved drawer origin to back face. USD Xform translate = back-face
-        # world position. Joint anchor = (0,0,0) in both frames.
+        # Stage D created drawer with origin at back face (world position).
+        # localPos1 = (0,0,0) since drawer origin IS the slide start.
+        # localPos0 = back-face position in parent body's local frame.
         max_travel = round(dims["depth_mm"] / 1000 * 0.85, 3)
 
-        slide_t = _get_xform_translate(stage, part_path)
-        local_pos0 = Gf.Vec3f(slide_t[0], slide_t[1], slide_t[2])
-        local_pos1 = Gf.Vec3f(0, 0, 0)  # origin = slide start
+        slide_wy = cy - dims["depth_mm"] / 1000 / 2  # back face world Y
+        parent_t = _get_xform_translate(stage, parent_path)
+        local_pos0 = Gf.Vec3f(cx - float(parent_t[0]),
+                               slide_wy - float(parent_t[1]),
+                               cz - float(parent_t[2]))
+        local_pos1 = Gf.Vec3f(0, 0, 0)  # drawer origin IS slide start
 
         _make_prismatic_joint(
             stage, joint_path,

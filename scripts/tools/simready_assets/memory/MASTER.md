@@ -26,7 +26,7 @@ sock.sendall(json.dumps({"type": "execute_code", "params": {"code": "<blender py
 
 ### GitHub
 - Username: therobotsimguy
-- Token: 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
+- Token: **store in env / credential manager — do not commit plaintext tokens**
 - Branch: simready-asset-generator
 
 ---
@@ -36,6 +36,7 @@ sock.sendall(json.dumps({"type": "execute_code", "params": {"code": "<blender py
 1. **Flag errors immediately** — don't silently continue when AI models fail. Tell user: "X is failing, here's what I need to fix it." Don't bury in logs.
 2. **Discuss before coding** — when user says "let's discuss", discuss. Don't pick an option and implement it. Present options, wait for approval.
 3. **Never use old version code in new version** — build from scratch. Importing old code causes cascading hacks.
+4. **Commit and push to GitHub** — after adding or editing SimReady/V7 files in this repo, commit with a clear message and `git push` to `origin` (branch `simready-asset-generator` unless user says otherwise). Never commit secrets (`api_keys.json`, tokens).
 
 ---
 
@@ -124,12 +125,28 @@ child.matrix_parent_inverse = parent.matrix_world.inverted()
 - CollisionAPI + MeshCollisionAPI on Mesh prims (children of Xform)
 - `approximation = "convexHull"` for all moving parts
 
-**Isaac Sim Load**
+**Isaac Sim Load (standing rule for agent + user)**
+
+- **Always minimal Kit** — `from isaacsim import SimulationApp` + `omni.usd.get_context().open_stage(...)`, same pattern as `load_in_isaacsim.py` and `scripts/tools/simready_assets/open_usd_in_isaacsim.py`.
+- **Never** use `isaaclab.app.AppLauncher` just to open a generated USD; it boots the full Isaac Lab stack and the scene/viewport won’t match a plain Sim open.
+- When giving run instructions after a pipeline run, **include the real path** to the file we produced (usually `*_physics.usd` after Stage F).
+
+Per-folder loader (USD fixed next to script — e.g. `cabinet_2_v7` or `cabinet_2_simready_out`):
 ```bash
 cd /home/msi/IsaacLab
-./isaaclab.sh -p scripts/tools/simready_assets/cabinet_2_v7/load_in_isaacsim.py
-# Press Space to play, Shift+drag on object to apply force
+./isaaclab.sh -p scripts/tools/simready_assets/cabinet_2_simready_out/load_in_isaacsim.py
 ```
+
+Generic opener (pass any absolute or repo-relative `--usd`):
+```bash
+cd /home/msi/IsaacLab
+./isaaclab.sh -p scripts/tools/simready_assets/open_usd_in_isaacsim.py \
+  --usd scripts/tools/simready_assets/cabinet_2_simready_out/teak_outdoor_sideboard_physics.usd
+```
+
+In Sim: Space to play; Shift+drag on object to apply force.
+
+**GitHub index:** upstream repo also has `scripts/tools/simready_assets/memory/MEMORY.md` (table of links). This file (`MASTER.md`) is the full on-disk playbook.
 
 ---
 
