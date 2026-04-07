@@ -1,3 +1,6 @@
+- [V7 Pipeline](v7_pipeline.md) — V7 architecture: stages A-F, entry points, output structure
+- [V7 Blender Lessons](v7_blender_lessons.md) — Cylinder origin bug fix, pivot=origin rule, parenting, USD export behavior
+- [V7 Physics Lessons](v7_physics_lessons.md) — ArticulationRootAPI setup, joint localPos, joint types, Isaac Sim run command
 - [Project Setup](project_setup.md) — Fresh install of Isaac Sim + Isaac Lab as of 2026-03-25
 - [Blender MCP Setup](blender_mcp_setup.md) — Blender MCP addon on localhost:9876, direct socket connection
 - [Pipeline & Lessons](lessons_pointer.md) — ALL lessons and pipeline knowledge is in scripts/tools/LESSONS.md — read that first
