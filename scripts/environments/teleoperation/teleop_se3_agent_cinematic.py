@@ -24,7 +24,12 @@ parser.add_argument("--num_envs", type=int, default=1, help="Number of environme
 parser.add_argument("--teleop_device", type=str, default="keyboard", help="Teleop device.")
 parser.add_argument("--task", type=str, default="Isaac-Lift-Cube-Franka-IK-Rel-v0", help="Task name.")
 parser.add_argument("--sensitivity", type=float, default=1.0, help="Sensitivity factor.")
-parser.add_argument("--asset", type=str, default=None, help="Path to *_simready.usd (overrides default).")
+parser.add_argument(
+    "--asset",
+    type=str,
+    default=None,
+    help="Absolute path to your SimReady USD (e.g. *_physics.usd from make_simready.py). Not a doc placeholder.",
+)
 parser.add_argument("--asset_pos", type=float, nargs=3, default=[2.25, 0.0, 0.0], help="Asset spawn position.")
 parser.add_argument("--asset_rot", type=float, nargs=4, default=[0.707, 0.0, 0.0, 0.707], help="Asset rotation (wxyz quat, +90deg Z so drawer fronts face robot).")
 AppLauncher.add_app_launcher_args(parser)
@@ -100,7 +105,28 @@ def main() -> None:
 
     # --- Custom asset ---
     asset_path = args_cli.asset or _DEFAULT_ASSET
-    asset_dir = os.path.dirname(os.path.abspath(asset_path))
+    asset_path = os.path.expanduser(asset_path)
+    asset_path_abs = os.path.abspath(asset_path)
+    if not os.path.isfile(asset_path_abs):
+        norm = asset_path.replace("\\", "/").lower()
+        placeholder_hint = ""
+        if "/path/to/" in norm or norm.endswith("/path/to/asset_physics.usd"):
+            placeholder_hint = (
+                "\n  You passed a documentation example path. Replace it with the real file "
+                "produced by make_simready.py (or omit --asset to use the script default)."
+            )
+        logger.error(
+            "Asset USD does not exist or is not a file:\n  %s%s\n\n"
+            "Example:\n  --asset %s",
+            asset_path_abs,
+            placeholder_hint,
+            _DEFAULT_ASSET,
+        )
+        simulation_app.close()
+        return
+
+    asset_path = asset_path_abs
+    asset_dir = os.path.dirname(asset_path)
 
     # Optional articulation.json (legacy simready assets with named DOFs)
     art_path = os.path.join(asset_dir, "articulation.json")
@@ -116,10 +142,17 @@ def main() -> None:
     # physics engine picks it up before simulation starts. The USD has no internal
     # physicsScene or simulationOwner (avoids reference scope issues). Root body
     # is kinematic (stays at spawn position, no world anchor needed).
+    from pxr import Usd as _Usd, UsdGeom as _UsdGeom
+    _tmp_stage = _Usd.Stage.Open(asset_path)
+    _mpu = _UsdGeom.GetStageMetersPerUnit(_tmp_stage)
+    _scale = (_mpu, _mpu, _mpu) if abs(_mpu - 1.0) > 0.01 else None
+    del _tmp_stage
+
     env_cfg.scene.cabinet = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/CustomAsset",
         spawn=UsdFileCfg(
-            usd_path=os.path.abspath(asset_path),
+            usd_path=asset_path,
+            scale=_scale,
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=tuple(args_cli.asset_pos),
@@ -230,6 +263,10 @@ def main() -> None:
     print(f"\n=== Teleoperation: {asset_name} ===")
     print("Robot: WASD/QE + ZX/TG/CV + K (gripper)")
     print("Reset: R | Save telemetry: L")
+    print(
+        "Viewport: Shift+mouse drag moves dynamic rigid bodies (doors, drawers, wheels). "
+        "The main cabinet shell is kinematic and will not drag."
+    )
     print("====================================\n")
 
     def save_telemetry():

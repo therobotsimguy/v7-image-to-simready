@@ -36,7 +36,7 @@ sock.sendall(json.dumps({"type": "execute_code", "params": {"code": "<blender py
 1. **Flag errors immediately** — don't silently continue when AI models fail. Tell user: "X is failing, here's what I need to fix it." Don't bury in logs.
 2. **Discuss before coding** — when user says "let's discuss", discuss. Don't pick an option and implement it. Present options, wait for approval.
 3. **Never use old version code in new version** — build from scratch. Importing old code causes cascading hacks.
-4. **Commit and push to GitHub** — after adding or editing SimReady/V7 files in this repo, commit with a clear message and `git push` to `origin` (branch `simready-asset-generator` unless user says otherwise). Never commit secrets (`api_keys.json`, tokens).
+4. **Do not push to GitHub by default** — only **`git push`** when the user **explicitly asks**. First validate changes locally (Isaac Sim, Blender, pipeline runs). Treat push as a deliberate release step, not automatic. Never commit secrets (`api_keys.json`, tokens). Local `git commit` only if the user wants versioned checkpoints.
 
 ---
 
@@ -67,16 +67,23 @@ Image → Stage A (Gemini geometry + Claude behavior) → stage_a.json
 
 ### Stage D: Blender Script
 
+**transform_apply Defaults Bug (CRITICAL)**
+- `transform_apply(scale=True)` silently also applies location and rotation — all three default to `True`
+- This bakes `obj.location` into vertex data and resets `obj.location` to `(0,0,0)`
+- If you then re-set `obj.location` to a pivot, geometry is double-offset (vertex bake + location)
+- **Fix**: always `transform_apply(location=False, rotation=False, scale=True)` when only applying scale
+
 **Cylinder/Knob Origin Bug (CRITICAL)**
 - `primitive_cylinder_add(location=(x,y,z))` + `transform_apply(rotation=True)` resets `obj.location` to (0,0,0)
 - Fix: create at origin (0,0,0), apply all transforms, then set `obj.location = (x,y,z)` at end
 
 **Joint Pivot = Object Origin (CRITICAL — from knowledge base)**
 - Origin must be AT the joint pivot, not at mesh center
-- For revolute doors: `set_origin_keep_visual(obj, ±w/2, 0, 0)` — shifts origin to hinge edge
-- For prismatic drawers: `set_origin_keep_visual(obj, 0, -d/2, 0)` — shifts origin to back face
+- Create cube at pivot position, `transform_apply(location=False, rotation=False, scale=True)`, then shift vertices
+- For revolute doors: create at hinge edge `(cx ± w/2, y, z)`, shift `v.co.x += ∓w/2`
+- For prismatic drawers: create at back face `(x, cy - d/2, z)`, shift `v.co.y += d/2`
 - This makes USD export `Xform translate = pivot world position`
-- Stage F then uses `localPos1 = (0,0,0)` correctly
+- Stage F then uses `localPos1 ≈ (0,0,0)` correctly
 
 **set_origin_keep_visual**
 ```python
@@ -87,12 +94,13 @@ def set_origin_keep_visual(obj, rel_x, rel_y, rel_z):
         v.co -= delta
 ```
 
-**Parenting**
+**Parenting (preserve world pose — parts are placed in world space)**
 ```python
-bpy.context.view_layer.update()  # ensure matrix_world current
+bpy.context.view_layer.update()
 child.parent = parent
 child.matrix_parent_inverse = parent.matrix_world.inverted()
 ```
+(RNA: parent inverse is the inverse of the parent’s world matrix at parenting time. Do **not** multiply by `child.matrix_world` — that breaks Keep Transform in Blender 4.3+.)
 
 **USD Export Behavior**
 - Box objects (transform_apply scale only): position baked into mesh vertices, NO Xform translate in USD
@@ -106,8 +114,39 @@ child.matrix_parent_inverse = parent.matrix_world.inverted()
 
 ### Stage F: USD Physics
 
-**ArticulationRootAPI vs RigidBodyAPI (CRITICAL)**
-- Root body: `ArticulationRootAPI` ONLY — NO `RigidBodyAPI`
+**Flat USD hierarchy (CRITICAL)**
+- PhysX swallows nested RigidBodyAPI prims into parent body. Movable parts (drawers, doors) MUST be siblings of main_body under /root, NOT children. In Blender: do NOT parent drawers/doors to main_body. Only parent handles to their drawer.
+- Structural parts (shelf, dividers) CAN be children — FixedJoints, fusing is OK.
+
+**ArticulationRootAPI + RigidBodyAPI setup**
+- ArticulationRootAPI on /root (scene Xform, NO RigidBodyAPI)
+- RigidBodyAPI on main_body + FixedJoint from world (empty body0) to anchor it
+- RigidBodyAPI on every movable part (drawers, doors)
+- NO RigidBodyAPI on grandchildren (handles, knobs)
+- World anchor: excludeFromArticulation = True
+
+**Joint localPos**
+- localPos0 = hinge/anchor world point via _world_point_to_local_body(parent)
+- localPos1 = same world point via _world_point_to_local_body(child), approx (0,0,0) when child origin is pivot
+- Use _mesh_world_bbox_via_vertices (vertex-based), NOT BBoxCache.ComputeWorldBound (broken for parented meshes)
+
+**Joint drives**
+- Low damping: 5.0 (prismatic), 2.0 (revolute). Stiffness = 0. High damping locks joints.
+
+**Joint Types (unchanged)**
+- ROTATIONAL: RevoluteJoint, axis=Z
+- LINEAR_TRANSLATIONAL: PrismaticJoint, axis=Y
+- Everything else: FixedJoint
+
+**Collision**
+- Skip collision on main_body/main_frame — blocks shift+drag rays. Also skip knob, handle, divider.
+- simulationOwner on every RigidBodyAPI and CollisionAPI prim.
+
+**Isaac Lab integration**
+- Use AssetBaseCfg, NOT ArticulationCfg. ArticulationView writes joint targets every step, overriding shift+drag. AssetBaseCfg lets PhysX handle joints natively.
+
+**(SUPERSEDED — old rules below were wrong)**
+~~Root body: ArticulationRootAPI ONLY — NO `RigidBodyAPI`
 - Adding `RigidBodyAPI` to root = floating-base → whole object flies away on sim start
 - All non-root children get `RigidBodyAPI`
 
@@ -123,9 +162,18 @@ child.matrix_parent_inverse = parent.matrix_world.inverted()
 
 **Collision**
 - CollisionAPI + MeshCollisionAPI on Mesh prims (children of Xform)
-- `approximation = "convexHull"` for all moving parts
+- Mesh approximation is chosen in `stage_f.py`: default **convexHull**; **`main_frame`** → **convexDecomposition**; very thin parts (min extent < 25 mm) → **boundingCube** (avoids degenerate convex hulls).
 - **Isaac Sim shift+drag picking:** knobs/handles have no `RigidBodyAPI` (grandchildren). If they have mesh colliders, clicks hit a shape with no body → door/drawer won’t move. **Omit collision** on parts whose names contain `knob`, `handle`, or `divider` so picks hit the parent door/drawer mesh.
 - **PhysicsScene + simulationOwner:** use **`/physicsScene`** (Isaac default). Set **`physics:simulationOwner`** on **every** `RigidBodyAPI` and `CollisionAPI` prim to that scene. Empty owners → bodies may not simulate or respond to viewport picking.
+
+**Mouse click-and-drag (research checklist vs V7)**  
+- Full notes (imported): [`memory/IsaacSim_mouse_drag_articulated_research.md`](IsaacSim_mouse_drag_articulated_research.md) — original path was `~/Downloads/IsaacSim Mouse Click-and-Drag Properties for Articulated Objects.md`.
+- That doc is a **generic** template; align with V7 as follows:
+  - **Root:** we use **`ArticulationRootAPI` only** on the base — **no** `RigidBodyAPI` on the root. The research example sometimes puts a **kinematic** rigid body on the frame; that is a different setup than our fixed articulation root.
+  - **Joints:** OpenUSD / Isaac use **`UsdPhysics.RevoluteJoint` / `PrismaticJoint`** prims plus relationships to bodies; joint “drives” in our pipeline are **`UsdPhysics.DriveAPI`** (e.g. angular damping on revolute, linear damping on prismatic), not necessarily the same attribute names as in the doc’s pseudo-API (`RevoluteJointAPI`, `CreateDriveTypeAttr`, etc.).
+  - **Handles:** the research doc suggests **extra colliders on handles** for grasping. **Do not apply that to V7 viewport drag** — we **strip** knob/handle collision so shift+drag rays hit the **door/drawer** rigid body (see above).
+  - **Scene:** we author **`UsdPhysics.Scene`** at **`/physicsScene`**, not `SceneAPI` on **`/`**.
+  - **Still valid ideas from the checklist:** dynamic links need **non-kinematic** rigid bodies, **non-zero mass**, **colliders** on the bodies you want to pick, **joint limits**, and a **physics scene** with gravity.~~
 
 **Isaac Sim Load (standing rule for agent + user)**
 
