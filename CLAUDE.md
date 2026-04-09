@@ -47,6 +47,13 @@ Key files:
 - **Colliders: follow simready-collision skill** — every interaction point must have a collider. Body gets per-mesh convexHull. Doors get largest-only. Handles always. Wheels get all meshes.
 - **L2W flattening: clear xform ops on BOTH Xform AND Mesh prims** — DCC exports (Omniverse, Blender) often put translate/rotate/scale/pivot on Mesh prims, not just parent Xforms. After baking L2W into vertices, clearing only `Xform` type prims leaves mesh-level transforms intact → double transformation → pieces scatter across the scene. Fix: `if prim.GetTypeName() in ("Xform", "Mesh"): ClearXformOpOrder()`.
 - **Recompute `extent` after L2W vertex transform** — the `extent` attribute is the renderer's bounding box hint. After L2W-transforming vertices from cm to meters, stale extents are 85-110× too large. This causes PhysX broad-phase and RTX BVH to allocate oversized spatial structures. Fix: recompute extent from actual vertex min/max immediately after `pts_attr.Set(world_pts)`.
+- **Wheel structural parts (fixer, body, bolts) must be under body Xform** — only rotating parts (tire, disc, detail) stay under the wheel Xform. Structural bracket/fork parts are children of body so they stay attached to the frame. Step 1c in `make_simready.py` does this via keyword matching: `rotating_keywords = ["tire", "disc", "detail"]`.
+- **Wheel joint limits must be unlimited** — use `[-9999, 9999]` not `[-180, 180]`. Limited range stops the wheel after half a turn.
+- **Wheel joint anchor = tire bounding box center** — NOT the Xform translate or pivot. Compute as `((xmin+xmax)/2, (ymin+ymax)/2, (zmin+zmax)/2)` from tire mesh vertices. Off-center anchors cause the wheel to orbit and clip through the bracket.
+- **Wheel collision: `convexDecomposition` on ALL meshes** (tire + disc + detail) — `convexHull` wraps them into blobs with poor ground contact. Working trolley uses `convexDecomposition` on all 12 wheel meshes.
+- **Body collision: `convexDecomposition` on ALL body meshes** with high quality params — `convexHull` on a concave body (trolley frame with rails) creates an invisible cloak. Set `maxConvexHulls=128`, `voxelResolution=500000`, `errorPercentage=1.0` for tight rail collision.
+- **Friction via `material:binding:physics`** — per-mesh `PhysicsMaterialAPI` attributes alone are NOT enough. PhysX resolves friction through `material:binding:physics` relationship pointing to a `PhysicsMaterial` prim (sf=1.0, df=0.9 for rubber). Without this binding, tires slide on ground instead of rolling.
+- **contactOffset = 0.0005** (0.5mm) in teleop script — Isaac Sim default is ~20mm which creates visible grip gap. Set on ALL collision shapes at runtime via teleop script. Do NOT set in the asset USD (teleop overwrites it).
 
 ### Running
 ```bash
