@@ -68,7 +68,7 @@ _DEFAULT_ASSET = (
 def main() -> None:
     """Run teleoperation with custom asset."""
     # Parse env config
-    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs)
+    env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=args_cli.num_envs, use_fabric=False)
     env_cfg.env_name = args_cli.task
     if not isinstance(env_cfg, ManagerBasedRLEnvCfg):
         raise ValueError(f"Only ManagerBasedRLEnv supported. Got: {type(env_cfg).__name__}")
@@ -264,8 +264,8 @@ def main() -> None:
     print("Robot: WASD/QE + ZX/TG/CV + K (gripper)")
     print("Reset: R | Save telemetry: L")
     print(
-        "Viewport: Shift+mouse drag moves dynamic rigid bodies (doors, drawers, wheels). "
-        "The main cabinet shell is kinematic and will not drag."
+        "Viewport: Shift+drag moves dynamic parts (doors, drawers, wheels). "
+        "Fridge/cabinet shell is kinematic (SimReady B–F recipe) and does not drag; click the moving part."
     )
     print("====================================\n")
 

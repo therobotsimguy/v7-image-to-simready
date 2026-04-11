@@ -12,6 +12,9 @@ Usage:
   python make_simready.py --input asset.usd                       # audit only (dry run)
   python make_simready.py --input asset.usd --fix                 # audit + classify + fix
   python make_simready.py --input asset.usd --fix --provider openai
+
+Fridge / trolley rules (viewport drag, masses, collision) are documented in the V8 repo:
+  PRINCIPLES_FRIDGE_TROLLEY.md
 """
 
 import argparse
@@ -382,7 +385,11 @@ Given a USD hierarchy, classify each part so physics can be applied.
 
 3. Use name AND geometry (bbox, mesh count, xform ops) to decide.
 
-4. Output ONLY valid JSON, no markdown fences, no explanation.
+4. Parts nested INSIDE a movable (shelves/racks/bins inside a door) are STRUCTURAL —
+   they move with their parent, not independently. Only DIRECT children of the body
+   should be classified as movable. Never classify a grandchild of the body as movable.
+
+5. Output ONLY valid JSON, no markdown fences, no explanation.
 
 ## Output format
 
@@ -532,15 +539,43 @@ def world_point_to_local(stage, body_path, world_pt):
 
 
 def mesh_world_bbox(stage, xform_path):
-    """Compute world bbox from mesh vertices under an Xform."""
+    """Compute world bbox from mesh vertices under an Xform (recursive)."""
     prim = stage.GetPrimAtPath(xform_path)
     if not prim:
         return None
     bmin = Gf.Vec3d(1e30, 1e30, 1e30)
     bmax = Gf.Vec3d(-1e30, -1e30, -1e30)
     found = False
-    for child in prim.GetAllChildren():
-        if child.GetTypeName() != "Mesh":
+    for child in _get_all_descendant_meshes(prim):
+        pts = child.GetAttribute("points")
+        if not pts or not pts.HasValue():
+            continue
+        mesh_xf = UsdGeom.Xformable(child)
+        l2w = mesh_xf.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+        for pt in pts.Get():
+            wp = l2w.TransformAffine(Gf.Vec3d(float(pt[0]), float(pt[1]), float(pt[2])))
+            bmin = Gf.Vec3d(min(bmin[0], wp[0]), min(bmin[1], wp[1]), min(bmin[2], wp[2]))
+            bmax = Gf.Vec3d(max(bmax[0], wp[0]), max(bmax[1], wp[1]), max(bmax[2], wp[2]))
+            found = True
+    if not found:
+        return None
+    return bmin, bmax
+
+
+# Keywords for rail/mechanism meshes that inflate drawer bbox beyond actual travel
+_DRAWER_RAIL_KEYWORDS = ("mechanism", "frame", "rail", "track", "slide", "runner", "guide")
+
+
+def mesh_world_bbox_excluding(stage, xform_path, exclude_keywords):
+    """Like mesh_world_bbox but skip meshes whose names contain any exclude keyword."""
+    prim = stage.GetPrimAtPath(xform_path)
+    if not prim:
+        return None
+    bmin = Gf.Vec3d(1e30, 1e30, 1e30)
+    bmax = Gf.Vec3d(-1e30, -1e30, -1e30)
+    found = False
+    for child in _get_all_descendant_meshes(prim):
+        if any(kw in child.GetName().lower() for kw in exclude_keywords):
             continue
         pts = child.GetAttribute("points")
         if not pts or not pts.HasValue():
@@ -557,15 +592,20 @@ def mesh_world_bbox(stage, xform_path):
     return bmin, bmax
 
 
-def detect_hinge_edge(stage, door_path):
-    """Detect which vertical edge is the hinge. Returns 'min_x' or 'max_x'."""
-    pivot = get_joint_anchor_world(stage, door_path)
+def detect_hinge_edge(stage, door_path, anchor_world=None):
+    """Detect which vertical edge is the hinge. Returns 'min_x' or 'max_x'.
+
+    anchor_world should be passed explicitly when calling after reparent
+    (pivot xformOps are cleared during reparent, so re-reading them gives wrong results).
+    """
+    if anchor_world is None:
+        anchor_world = get_joint_anchor_world(stage, door_path)
     bbox = mesh_world_bbox(stage, door_path)
     if not bbox:
         return "min_x"
     bmin, bmax = bbox
-    dist_to_min = abs(pivot[0] - bmin[0])
-    dist_to_max = abs(pivot[0] - bmax[0])
+    dist_to_min = abs(anchor_world[0] - bmin[0])
+    dist_to_max = abs(anchor_world[0] - bmax[0])
     return "min_x" if dist_to_min < dist_to_max else "max_x"
 
 
@@ -574,6 +614,26 @@ def _mesh_vert_count(prim):
     if pts and pts.HasValue():
         return len(pts.Get())
     return 0
+
+
+def _get_all_descendant_meshes(prim):
+    """Recursively collect all Mesh prims under a prim, including those under child Xforms."""
+    meshes = []
+    for child in prim.GetChildren():
+        if child.GetTypeName() == "Mesh":
+            meshes.append(child)
+        elif child.GetTypeName() == "Xform":
+            meshes.extend(_get_all_descendant_meshes(child))
+    return meshes
+
+
+MASS_CLAMPS = {
+    # Fridge door Xforms (mesh bbox) often estimate 40–90kg; caps B–F SimReady outputs. Shift+drag is tuned via revolute drive damping, not mass cap.
+    "revolute": (2.0, 100.0),
+    "prismatic": (0.5, 5.0),
+    "continuous": (0.05, 1.0),
+    "fixed": (0.1, 10.0),
+}
 
 
 def estimate_mass(bbox, mpu=1.0, density=500.0):
@@ -609,6 +669,11 @@ def strip_existing_physics(stage):
         if "Joint" in prim_type:
             prims_to_remove.append(prim.GetPath())
             n_joints += 1
+            continue
+
+        # C7: host app owns PhysicsScene — remove embedded scenes (audit flags them; previously only props were stripped)
+        if prim.IsA(UsdPhysics.Scene):
+            prims_to_remove.append(prim.GetPath())
             continue
 
         if prim.GetName() in ("GripMaterial", "DefaultPhysMaterial") and prim_type == "Material":
@@ -656,16 +721,47 @@ def strip_existing_physics(stage):
 
 # --- Collision ---
 
+# Movable direct-child meshes matching these substrings get no collider — they overlap the cabinet
+# cavity / frame and jam revolute doors in viewport drag (Refrigerator_A vs B: extra clips/bolts/logo/locker
+# hulls). Keep outer panel (*body*) and *handle* for manipulation. Matches simready-collision “skip bolts, clips, rubber”.
+_MOVABLE_COLLISION_SKIP_SUBSTR = (
+    "interior",
+    "clips",
+    "bolt",
+    "logo",
+    "rubber",
+    "lockerbox",
+    "lockercilinder",
+    "lockerbase",
+    "refresher",
+    "mechanism",
+    "frame",
+)
+
+
+def _filter_movable_collision_meshes(mesh_prims):
+    kept = [m for m in mesh_prims
+            if not any(s in m.GetName().lower() for s in _MOVABLE_COLLISION_SKIP_SUBSTR)]
+    return kept if kept else list(mesh_prims)
+
+
 def apply_collision_q1(stage, xform_path, is_body=False):
-    """Apply CollisionAPI: decomp on large concave body meshes, hull on small parts."""
+    """Apply CollisionAPI: decomp on large concave body meshes, hull on small parts.
+
+    For body: recurse into all descendant meshes.
+    For movable parts: direct child meshes only — interior sub-Xform meshes
+    (door shelves, rack bins) would clip with body internals when closed.
+    """
     prim = stage.GetPrimAtPath(xform_path)
     if not prim:
         return 0, 0
 
-    meshes = []
-    for desc in prim.GetAllChildren():
-        if desc.GetTypeName() == "Mesh":
-            meshes.append((desc, _mesh_vert_count(desc)))
+    if is_body:
+        meshes = [(m, _mesh_vert_count(m)) for m in _get_all_descendant_meshes(prim)]
+    else:
+        raw = [m for m in prim.GetChildren() if m.GetTypeName() == "Mesh"]
+        raw = _filter_movable_collision_meshes(raw)
+        meshes = [(m, _mesh_vert_count(m)) for m in raw]
     if not meshes:
         return 0, 0
 
@@ -701,9 +797,7 @@ def apply_collision_wheels(stage, xform_path):
     if not prim:
         return 0
     n = 0
-    for desc in prim.GetAllChildren():
-        if desc.GetTypeName() != "Mesh":
-            continue
+    for desc in _get_all_descendant_meshes(prim):
         UsdPhysics.CollisionAPI.Apply(desc)
         mc = UsdPhysics.MeshCollisionAPI.Apply(desc)
         mc.CreateApproximationAttr("convexDecomposition")
@@ -786,13 +880,16 @@ def wire_friction(stage, dp_path, handle_mesh_paths):
 
 # --- Physics applicators ---
 
-def apply_rigid_body(stage, path, kinematic=False):
+def apply_rigid_body(stage, path, kinematic=False, dynamic_body=False):
     prim = stage.GetPrimAtPath(path)
     if not prim:
         return
     UsdPhysics.RigidBodyAPI.Apply(prim)
     if kinematic:
         prim.CreateAttribute("physics:kinematicEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+    if dynamic_body:
+        prim.CreateAttribute("physics:linearDamping", Sdf.ValueTypeNames.Float).Set(100.0)
+        prim.CreateAttribute("physics:angularDamping", Sdf.ValueTypeNames.Float).Set(200.0)
 
 
 def apply_mass(stage, path, mass_kg):
@@ -819,15 +916,17 @@ def make_revolute_joint(stage, joint_path, body0, body1, local_pos0, local_pos1,
     joint.CreateLocalPos0Attr(local_pos0)
     joint.CreateLocalPos1Attr(local_pos1)
     drive = UsdPhysics.DriveAPI.Apply(stage.GetPrimAtPath(joint_path), "angular")
+    # Low damping so Isaac viewport shift+drag can rotate hinged parts (skill: ~2 Nm·s/rad for doors)
     drive.CreateDampingAttr(2.0)
+    # Always stiffness 0: a positional spring to 0° (old dynamic_body branch) locks doors closed and blocks drag/gripper.
     drive.CreateStiffnessAttr(0.0)
 
 
 def make_prismatic_joint(stage, joint_path, body0, body1, local_pos0, local_pos1,
-                         axis="Y", upper_m=0.4):
+                         axis="Y", lower_m=0.0, upper_m=0.4):
     joint = UsdPhysics.PrismaticJoint.Define(stage, joint_path)
     joint.CreateAxisAttr(axis)
-    joint.CreateLowerLimitAttr(0.0)
+    joint.CreateLowerLimitAttr(lower_m)
     joint.CreateUpperLimitAttr(upper_m)
     joint.CreateBody0Rel().SetTargets([body0])
     joint.CreateBody1Rel().SetTargets([body1])
@@ -846,8 +945,10 @@ def make_continuous_joint(stage, joint_path, body0, body1, local_pos0, local_pos
     joint.CreateBody1Rel().SetTargets([body1])
     joint.CreateLocalPos0Attr(local_pos0)
     joint.CreateLocalPos1Attr(local_pos1)
+    joint.CreateLowerLimitAttr(-9999.0)
+    joint.CreateUpperLimitAttr(9999.0)
     drive = UsdPhysics.DriveAPI.Apply(stage.GetPrimAtPath(joint_path), "angular")
-    drive.CreateDampingAttr(0.5)
+    drive.CreateDampingAttr(2.0)
     drive.CreateStiffnessAttr(0.0)
 
 
@@ -862,20 +963,33 @@ def make_fixed_joint(stage, joint_path, body0, body1, local_pos0, local_pos1):
 # --- Reparent ---
 
 def reparent_prims(stage, prim_paths, new_parent_path):
-    """Move prims to be children of new_parent_path."""
+    """Move prims to be children of new_parent_path.
+
+    Processes deepest paths first in separate batch edits to avoid
+    parent-child conflicts (moving a parent invalidates children's source paths).
+    """
     layer = stage.GetRootLayer()
-    edit = Sdf.BatchNamespaceEdit()
-    moved = {}
-    for old_path in prim_paths:
-        new_path = new_parent_path.AppendChild(old_path.name)
-        if old_path == new_path:
+
+    by_depth = {}
+    for path in prim_paths:
+        depth = len(path.GetPrefixes())
+        by_depth.setdefault(depth, []).append(path)
+
+    all_moved = {}
+    for depth in sorted(by_depth.keys(), reverse=True):
+        edit = Sdf.BatchNamespaceEdit()
+        batch = {}
+        for old_path in by_depth[depth]:
+            new_path = new_parent_path.AppendChild(old_path.name)
+            if old_path == new_path:
+                continue
+            edit.Add(old_path, new_path)
+            batch[str(old_path)] = str(new_path)
+        if batch and not layer.Apply(edit):
+            print(f"  WARNING: SdfBatchNamespaceEdit failed at depth {depth}")
             continue
-        edit.Add(old_path, new_path)
-        moved[str(old_path)] = str(new_path)
-    if moved and not layer.Apply(edit):
-        print("  WARNING: SdfBatchNamespaceEdit failed")
-        return {}
-    return moved
+        all_moved.update(batch)
+    return all_moved
 
 
 def reparent_prims_preserve_world_xform(stage, prim_paths, new_parent_path):
@@ -910,10 +1024,40 @@ def reparent_prims_preserve_world_xform(stage, prim_paths, new_parent_path):
     return moved
 
 
+# --- Wheel structural splitting ---
+
+WHEEL_STRUCTURAL_KEYWORDS = ("fixer", "bolt", "body", "mount", "stopper")
+
+def split_wheel_structural_parts(stage, movables, body_path):
+    """Move structural child meshes (fixer/body/bolts) from wheel Xforms to body.
+
+    Caster wheels contain rotating parts (tire, disc, detail) and structural
+    parts (fixer, body, bolts = the bracket/fork). Structural parts must stay
+    with the body; if they rotate with the wheel, brackets detach under force.
+    """
+    all_moved = {}
+    for name, info in movables.items():
+        if info["joint"] != "continuous":
+            continue
+        wheel_prim = stage.GetPrimAtPath(info["path"])
+        if not wheel_prim:
+            continue
+        structural_paths = []
+        for child in wheel_prim.GetAllChildren():
+            if child.GetTypeName() != "Mesh":
+                continue
+            if any(kw in child.GetName().lower() for kw in WHEEL_STRUCTURAL_KEYWORDS):
+                structural_paths.append(child.GetPath())
+        if structural_paths:
+            moved = reparent_prims_preserve_world_xform(stage, structural_paths, body_path)
+            all_moved.update(moved)
+    return all_moved
+
+
 # --- Handle detection ---
 
 def find_handle_meshes(stage, movable_paths):
-    """Find Mesh prims that are handles/knobs under movable Xforms."""
+    """Find Mesh prims that are handles/knobs under movable Xforms (recursive)."""
     handle_paths = []
     handle_keywords = ("handle", "knob", "grip", "pull", "lever")
 
@@ -921,11 +1065,9 @@ def find_handle_meshes(stage, movable_paths):
         prim = stage.GetPrimAtPath(path)
         if not prim:
             continue
-        for child in prim.GetAllChildren():
-            if child.GetTypeName() != "Mesh":
-                continue
-            if any(kw in child.GetName().lower() for kw in handle_keywords):
-                handle_paths.append(child.GetPath())
+        for mesh in _get_all_descendant_meshes(prim):
+            if any(kw in mesh.GetName().lower() for kw in handle_keywords):
+                handle_paths.append(mesh.GetPath())
 
     return handle_paths
 
@@ -1026,7 +1168,7 @@ def normalize_to_meters(stage):
     return True
 
 
-def apply_physics(stage, classification, output_usd):
+def apply_physics(stage, classification, output_usd, dynamic_body=False):
     """Phase 3: Apply all missing physics based on classification."""
     default_prim = stage.GetDefaultPrim()
     dp_path = default_prim.GetPath()
@@ -1041,6 +1183,18 @@ def apply_physics(stage, classification, output_usd):
 
     body_path = resolve_body_xform(stage, default_prim, classification["body"])
     movables = resolve_movable_parts(stage, body_path, dp_path, classification)
+
+    # Guard: skip movables nested inside other movables (physically wrong —
+    # they'd get jointed to body instead of their parent movable)
+    movable_path_strs = {str(info["path"]) for info in movables.values()}
+    nested = [name for name, info in movables.items()
+              if any(str(info["path"]).startswith(mp + "/")
+                     for mp in movable_path_strs - {str(info["path"])})]
+    if nested:
+        print(f"\n  NESTED MOVABLES (treating as structural — move with parent):")
+        for name in nested:
+            print(f"    {name}")
+            del movables[name]
 
     print(f"\n  Body: {body_path}")
     print(f"  Movable parts: {len(movables)}")
@@ -1069,19 +1223,49 @@ def apply_physics(stage, classification, output_usd):
             if old_p in moved:
                 movables[name]["path"] = Sdf.Path(moved[old_p])
 
+    # --- Wheel structural split (fixer/body/bolts -> body) ---
+    wheel_moved = split_wheel_structural_parts(stage, movables, body_path)
+    if wheel_moved:
+        print(f"\n  WHEEL SPLIT: {len(wheel_moved)} structural meshes -> body")
+        for old, new in wheel_moved.items():
+            print(f"    {old} -> {new}")
+        for name, info in movables.items():
+            if info["joint"] == "continuous":
+                bbox = mesh_world_bbox(stage, info["path"])
+                if bbox:
+                    tire_center = Gf.Vec3d(
+                        (bbox[0][0] + bbox[1][0]) / 2,
+                        (bbox[0][1] + bbox[1][1]) / 2,
+                        (bbox[0][2] + bbox[1][2]) / 2)
+                    saved_anchors[name] = tire_center
+                    size_x = abs(bbox[1][0] - bbox[0][0])
+                    size_y = abs(bbox[1][1] - bbox[0][1])
+                    detected_axis = "Y" if size_y < size_x else "X"
+                    if detected_axis != info["axis"]:
+                        print(f"    axis override {name}: {info['axis']} -> {detected_axis} (tire X={size_x:.4f} Y={size_y:.4f})")
+                        info["axis"] = detected_axis
+                    print(f"    anchor {name} (tire center): ({tire_center[0]:.4f}, {tire_center[1]:.4f}, {tire_center[2]:.4f})")
+
     # --- C1: Rigid Bodies + Mass ---
     print(f"\n  RIGID BODIES:")
-    apply_rigid_body(stage, body_path, kinematic=True)
+    body_kinematic = not dynamic_body
+    apply_rigid_body(stage, body_path, kinematic=body_kinematic, dynamic_body=dynamic_body)
     body_bbox = mesh_world_bbox(stage, body_path)
-    body_mass = estimate_mass(body_bbox, mpu, density=600.0)
+    body_density = 80.0 if dynamic_body else 600.0
+    body_mass = estimate_mass(body_bbox, mpu, density=body_density)
+    if dynamic_body:
+        body_mass = max(5.0, min(100.0, body_mass))
     apply_mass(stage, body_path, body_mass)
-    print(f"    body: kinematic, mass={body_mass:.1f}kg")
+    body_mode = "dynamic" if dynamic_body else "kinematic"
+    print(f"    body: {body_mode}, mass={body_mass:.1f}kg")
 
     for name, info in movables.items():
         path = info["path"]
         apply_rigid_body(stage, path)
         bbox = mesh_world_bbox(stage, path)
         mass = estimate_mass(bbox, mpu, density=500.0)
+        clamp = MASS_CLAMPS.get(info["joint"], (0.1, 50.0))
+        mass = max(clamp[0], min(clamp[1], mass))
         apply_mass(stage, path, mass)
         print(f"    {name}: dynamic, mass={mass:.2f}kg")
 
@@ -1123,16 +1307,43 @@ def apply_physics(stage, classification, output_usd):
         lp1_f = Gf.Vec3f(float(lp1[0]), float(lp1[1]), float(lp1[2]))
 
         if jtype == "revolute":
-            hinge = detect_hinge_edge(stage, path)
+            hinge = detect_hinge_edge(stage, path, anchor_world=anchor)
             make_revolute_joint(stage, joint_path, body_path, path,
                                 lp0_f, lp1_f, axis=axis, hinge_edge=hinge)
             print(f"    RevoluteJoint  {name}  axis={axis} hinge={hinge}")
         elif jtype == "prismatic":
             bbox = mesh_world_bbox(stage, path)
-            depth = abs(bbox[1][1] - bbox[0][1]) * mpu if bbox else 0.4
+            axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
+            depth = abs(bbox[1][axis_idx] - bbox[0][axis_idx]) if bbox else 0.4
+            # If drawer has rail mechanism meshes, limit travel to maintain
+            # rail-track overlap (rail must not fully exit the body track).
+            has_rail = False
+            drawer_prim = stage.GetPrimAtPath(path)
+            if drawer_prim:
+                for child in Usd.PrimRange(drawer_prim):
+                    if child.IsA(UsdGeom.Mesh) and any(
+                            kw in child.GetName().lower() for kw in _DRAWER_RAIL_KEYWORDS):
+                        has_rail = True
+                        break
+            if has_rail:
+                travel = depth * 0.45   # ~45% of total depth keeps rail overlapped
+                print(f"    (rail detected — limiting travel to {travel:.3f}m for overlap)")
+            else:
+                travel = depth * 0.85
+            # Pull direction: drawer face is on the side closer to body exterior
+            if bbox and body_bbox:
+                body_center_ax = (body_bbox[0][axis_idx] + body_bbox[1][axis_idx]) / 2
+                drawer_center_ax = (bbox[0][axis_idx] + bbox[1][axis_idx]) / 2
+                if drawer_center_ax < body_center_ax:
+                    lower_m, upper_m = -travel, 0.0
+                else:
+                    lower_m, upper_m = 0.0, travel
+            else:
+                lower_m, upper_m = 0.0, travel
             make_prismatic_joint(stage, joint_path, body_path, path,
-                                 lp0_f, lp1_f, axis=axis, upper_m=depth * 0.85)
-            print(f"    PrismaticJoint {name}  axis={axis} travel={depth*0.85:.3f}m")
+                                 lp0_f, lp1_f, axis=axis,
+                                 lower_m=lower_m, upper_m=upper_m)
+            print(f"    PrismaticJoint {name}  axis={axis} travel=[{lower_m:.3f}, {upper_m:.3f}]m")
         elif jtype == "continuous":
             make_continuous_joint(stage, joint_path, body_path, path,
                                   lp0_f, lp1_f, axis=axis)
@@ -1154,7 +1365,8 @@ def apply_physics(stage, classification, output_usd):
     print(f"\n  SAVED: {output_usd}")
 
 
-def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None):
+def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
+        classify_json=None, dynamic_body=False):
     """Main entry point: audit, optionally classify + fix."""
     print(f"\n{'='*60}")
     print(f"  make_simready (V8)")
@@ -1178,12 +1390,24 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None)
         return None
 
     # Phase 2: Classify
-    classification = classify_parts(stage, provider=provider, model=model)
+    if classify_json:
+        with open(classify_json) as f:
+            classification = json.load(f)
+        print(f"\n  CLASSIFICATION (from file):")
+        print(f"    body: {classification['body']}")
+        for name, spec in classification.get("parts", {}).items():
+            cls = spec.get("class", "?")
+            axis = spec.get("axis", "")
+            axis_str = f" axis={axis}" if axis else ""
+            print(f"    {name:40s} -> {cls}{axis_str}")
+    else:
+        classification = classify_parts(stage, provider=provider, model=model)
 
     # Phase 3: Apply
     out_dir = output_dir or os.path.join(os.path.dirname(input_usd), "simready_out")
     os.makedirs(out_dir, exist_ok=True)
     basename = os.path.splitext(os.path.basename(input_usd))[0]
+    # Single output name for entire SimReady fleet (fridges B–F): always {name}_physics.usd
     output_usd = os.path.join(out_dir, f"{basename}_physics.usd")
     shutil.copy2(input_usd, output_usd)
 
@@ -1195,7 +1419,7 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None)
         print(f"  Copied Textures/")
 
     out_stage = Usd.Stage.Open(output_usd)
-    apply_physics(out_stage, classification, output_usd)
+    apply_physics(out_stage, classification, output_usd, dynamic_body=dynamic_body)
 
     # Re-audit
     final_stage = Usd.Stage.Open(output_usd)
@@ -1211,11 +1435,7 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None)
     # Ready-to-run commands
     abs_output = os.path.abspath(output_usd)
     print(f"\n  Run commands:")
-    print(f"    # Standalone (shift+drag to test)")
-    print(f"    ./isaaclab.sh -p scripts/tools/simready_assets/open_usd_in_isaacsim.py \\")
-    print(f"      --usd {abs_output}")
-    print(f"")
-    print(f"    # With Franka robot")
+    print(f"    # Franka teleop")
     print(f"    ./isaaclab.sh -p scripts/environments/teleoperation/teleop_se3_agent_cinematic.py \\")
     print(f"      --asset {abs_output} --device cpu")
     print(f"\n{'='*60}")
@@ -1231,6 +1451,10 @@ if __name__ == "__main__":
     ap.add_argument("--provider", default="anthropic", choices=["openai", "anthropic"],
                     help="LLM provider for classification (default: anthropic)")
     ap.add_argument("--model", default=None, help="LLM model override")
+    ap.add_argument("--classify-json", default=None,
+                    help="Pre-made classification JSON (skips LLM call)")
+    ap.add_argument("--dynamic", action="store_true",
+                    help="Dynamic main body (e.g. trolley drag tests). Same *_physics.usd path. Not the fridge B–F recipe — omit for refrigerators.")
     args = ap.parse_args()
 
     input_path = os.path.abspath(args.input)
@@ -1239,4 +1463,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     run(input_path, fix=args.fix, provider=args.provider,
-        model=args.model, output_dir=args.output_dir)
+        model=args.model, output_dir=args.output_dir,
+        classify_json=args.classify_json, dynamic_body=args.dynamic)
