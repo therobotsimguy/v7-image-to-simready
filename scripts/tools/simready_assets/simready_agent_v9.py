@@ -201,6 +201,43 @@ async def run_pipeline(input_usd: str, dynamic: bool = False, max_retries: int =
     print(hierarchy_text)
     print()
 
+    # ── Phase 1b: Visual analysis (V3 — Blender + Gemini) ──
+    vision_report = ""
+    try:
+        from gemini_vision import analyze_asset_visually
+        print("[Phase 1b] Visual analysis (Blender + Gemini)...")
+        vision_result = analyze_asset_visually(
+            str(input_path), hierarchy_text=hierarchy_text, verbose=True)
+        if "error" not in vision_result:
+            # Format for classifier consumption
+            parts = vision_result.get("movable_parts", [])
+            materials = vision_result.get("materials", {})
+            issues = vision_result.get("issues", [])
+            lines = ["GEMINI VISUAL ANALYSIS:"]
+            if parts:
+                lines.append(f"  Movable parts seen ({len(parts)}):")
+                for p in parts:
+                    handle = " [handle visible]" if p.get("handle_visible") else ""
+                    hinge = f" hinge={p.get('hinge_side')}" if p.get("hinge_side") else ""
+                    lines.append(f"    {p.get('name','?')} → {p.get('type','?')} axis={p.get('axis','?')}{hinge}{handle}")
+            if materials:
+                lines.append(f"  Materials detected:")
+                for surface, mat in materials.items():
+                    lines.append(f"    {surface}: {mat}")
+            if issues:
+                lines.append(f"  Issues flagged:")
+                for issue in issues:
+                    lines.append(f"    - {issue}")
+            vision_report = "\n".join(lines)
+            print(vision_report)
+        else:
+            print(f"  Vision analysis returned error: {vision_result['error']}")
+    except ImportError:
+        print("[Phase 1b] Skipped — gemini_vision.py not available")
+    except Exception as e:
+        print(f"[Phase 1b] Vision analysis failed: {e}")
+    print()
+
     # ── Load skills ──
     behaviors_skill = load_skill("simready-behaviors")
     criteria_skill = load_skill("simready-criteria")
@@ -222,6 +259,11 @@ Given a USD hierarchy, classify each part so physics can be applied by make_simr
 {failure_skill}
 
 ## Your Task
+
+If a Gemini visual analysis report is provided alongside the hierarchy,
+use it to cross-check your classification — especially for parts with
+ambiguous names. Gemini can see handles, hinges, and materials you can't
+infer from prim names alone.
 
 1. Identify the BODY — the main structural Xform (largest, most meshes/vertices).
 2. For each Xform child of the body (or default prim), classify:
@@ -314,7 +356,7 @@ The USD hierarchy has already been extracted:
 ```
 {hierarchy_text}
 ```
-
+{('## Gemini Visual Analysis' + chr(10) + chr(10) + vision_report + chr(10)) if vision_report else ''}
 ## Tools Available
 
 - "classifier" agent: Send it the hierarchy, it returns classify.json
