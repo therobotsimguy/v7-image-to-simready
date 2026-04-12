@@ -775,7 +775,11 @@ def apply_collision_q1(stage, xform_path, is_body=False):
         if use_decomp and n_decomp < MAX_DECOMP_BUDGET:
             mc.CreateApproximationAttr("convexDecomposition")
             n_decomp += 1
-            if npts > QUALITY_VERT_THRESHOLD:
+            # Always set quality params on body decomposition — default
+            # decomposition produces bloated hulls around thin concave
+            # geometry (e.g., trolley rails, fridge frames). The vertex
+            # threshold only gates additional quality; body always gets it.
+            if is_body or npts > QUALITY_VERT_THRESHOLD:
                 mesh_prim.CreateAttribute(
                     "physxConvexDecompositionCollision:maxConvexHulls",
                     Sdf.ValueTypeNames.Int).Set(128)

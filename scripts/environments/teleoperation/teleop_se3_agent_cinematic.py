@@ -94,7 +94,7 @@ def main() -> None:
     from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
     env_cfg.scene.robot.spawn.usd_path = f"{ISAAC_NUCLEUS_DIR}/Robots/FrankaRobotics/FrankaPanda/franka.usd"
     env_cfg.scene.robot.spawn.collision_props = sim_utils.CollisionPropertiesCfg(
-        contact_offset=0.002, rest_offset=0.0,
+        contact_offset=0.00005, rest_offset=0.0,
     )
     env_cfg.scene.robot.spawn.rigid_props.solver_position_iteration_count = 16
     env_cfg.scene.robot.spawn.rigid_props.solver_velocity_iteration_count = 2
@@ -184,14 +184,30 @@ def main() -> None:
             fixed_count = 0
             for prim in _UsdPhysics.CollisionAPI.GetSchemaAttributeNames():
                 pass  # just checking import works
+            finger_count = 0
             for prim in stage.Traverse():
                 prim_path = str(prim.GetPath())
                 if prim_path.startswith(robot_prim_path) or prim_path.startswith("/World/envs/env_0"):
                     if prim.HasAPI(_UsdPhysics.CollisionAPI):
-                        prim.CreateAttribute("physxCollision:contactOffset", _Sdf.ValueTypeNames.Float).Set(0.0005)
+                        prim.CreateAttribute("physxCollision:contactOffset", _Sdf.ValueTypeNames.Float).Set(0.00005)
                         prim.CreateAttribute("physxCollision:restOffset", _Sdf.ValueTypeNames.Float).Set(0.0)
                         fixed_count += 1
-            print(f"[CollisionFix] Set contactOffset=0.0005 on {fixed_count} collision shapes")
+                        # Fix gripper finger invisible cloak: the finger collision
+                        # mesh is concave (inner gripping face) but PhysX defaults to
+                        # convexHull which bloats it by ~66%. Use convexDecomposition
+                        # for tight finger contact.
+                        prim_name = prim.GetName().lower()
+                        if "finger" in prim_name or "hand" in prim_name:
+                            mc = _UsdPhysics.MeshCollisionAPI.Apply(prim)
+                            mc.CreateApproximationAttr("convexDecomposition")
+                            prim.CreateAttribute(
+                                "physxConvexDecompositionCollision:maxConvexHulls",
+                                _Sdf.ValueTypeNames.Int).Set(64)
+                            prim.CreateAttribute(
+                                "physxConvexDecompositionCollision:voxelResolution",
+                                _Sdf.ValueTypeNames.Int).Set(300000)
+                            finger_count += 1
+            print(f"[CollisionFix] Set contactOffset=0.00005 on {fixed_count} shapes, decomp on {finger_count} finger/hand meshes")
     except Exception as e:
         print(f"[CollisionFix] Could not fix robot offsets: {e}")
 
