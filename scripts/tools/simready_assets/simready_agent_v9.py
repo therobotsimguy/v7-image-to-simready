@@ -538,6 +538,19 @@ Test with Franka teleop:
         except Exception as e:
             print(f"\n[Phase 8] Visual verification error: {e}")
 
+    # ── Phase 9: URDF export (dual-format) ──
+    if output_usd:
+        try:
+            from export_urdf import export_urdf
+            print(f"\n[Phase 9] URDF export (dual-format)...")
+            print("-" * 70)
+            urdf_path = export_urdf(str(output_usd), verbose=True)
+            print(f"\n  Asset is now dual-format: USD (PhysX) + URDF (MuJoCo/PyBullet/Drake)")
+        except ImportError:
+            print(f"\n[Phase 9] Skipped — export_urdf.py not available")
+        except Exception as e:
+            print(f"\n[Phase 9] URDF export error: {e}")
+
     print(f"\n{'=' * 70}")
     print("  V9 Pipeline Complete")
     print(f"{'=' * 70}")
