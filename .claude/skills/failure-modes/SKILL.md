@@ -62,6 +62,8 @@ description: >-
 | F32 | Friction | Dynamic body oscillates wildly when dragged | No linear/angular damping on body | Set linearDamping=100, angularDamping=200 for dynamic |
 | F33 | Clean | Host simulator conflict | PhysicsScene embedded in asset USD | Strip all PhysicsScene prims |
 | F34 | Clean | Gripper gap 20mm instead of 0.5mm | contactOffset baked in asset USD | Strip contactOffset, set at runtime only (0.0005) |
+| F35 | Collision | Movable part has zero collision — can't interact | Mesh is nested Xform→Xform→Mesh, collision code only checks direct children | Fallback to recursive mesh search when GetChildren() finds no Mesh |
+| F36 | Collision | Gripper gap from robot finger convexHull | Franka finger.stl is concave, hull bloats 66% | Apply convexDecomposition on finger/hand meshes at runtime |
 
 ## Wheel Compound Failures
 
@@ -89,7 +91,7 @@ When C1-C7 audit fails, trace to failure mode:
 | Criterion Failed | Likely Failure Modes |
 |-----------------|---------------------|
 | C1 (Rigid Bodies) | F21–F24 (mass), F11 (nested rigid) |
-| C2 (Collision) | F25–F29 (collision strategy) |
+| C2 (Collision) | F25–F29 (collision strategy), F35 (nested mesh = zero colliders on movable) |
 | C3 (Friction) | F30–F31 (binding, GripMaterial) |
 | C4 (Hierarchy) | F11 (nested), F06/F10 (classification) |
 | C5 (Joints) | F14–F17 (anchors, axis), F09 (wrong axis) |

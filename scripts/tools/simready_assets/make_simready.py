@@ -146,7 +146,7 @@ def audit(stage):
         c1_detail += " — NESTED rigid body detected"
     results["C1 Rigid Bodies"] = {"pass": c1_pass, "detail": c1_detail}
 
-    # C2: Collision Shapes
+    # C2: Collision Shapes (global + per-rigid-body coverage)
     c2_pass = len(colliders) > 0 and all(c["approx"] != "none" for c in colliders)
     approx_counts = {}
     for c in colliders:
@@ -156,6 +156,22 @@ def audit(stage):
         c2_detail += f" ({approx_counts})"
     if not colliders:
         c2_detail = "0 colliders"
+    # Per-rigid-body coverage: every rigid body must have ≥1 descendant collider
+    bodies_without_colliders = []
+    for rb in rigid_bodies:
+        rb_prim = stage.GetPrimAtPath(rb["path"])
+        if not rb_prim:
+            continue
+        has_col = False
+        for desc in Usd.PrimRange(rb_prim):
+            if desc.HasAPI(UsdPhysics.CollisionAPI):
+                has_col = True
+                break
+        if not has_col:
+            bodies_without_colliders.append(rb["path"])
+    if bodies_without_colliders:
+        c2_pass = False
+        c2_detail += f" — {len(bodies_without_colliders)} rigid body(s) have NO colliders: {bodies_without_colliders}"
     results["C2 Collision Shapes"] = {"pass": c2_pass, "detail": c2_detail}
 
     # C3: Friction Materials
@@ -762,6 +778,12 @@ def apply_collision_q1(stage, xform_path, is_body=False):
         raw = [m for m in prim.GetChildren() if m.GetTypeName() == "Mesh"]
         raw = _filter_movable_collision_meshes(raw)
         meshes = [(m, _mesh_vert_count(m)) for m in raw]
+        # Fallback: if no direct Mesh children (deeply nested Xform→Xform→Mesh),
+        # search recursively. Common on small tools (scissors, forceps).
+        if not meshes:
+            raw = list(_get_all_descendant_meshes(prim))
+            raw = _filter_movable_collision_meshes(raw)
+            meshes = [(m, _mesh_vert_count(m)) for m in raw]
     if not meshes:
         return 0, 0
 

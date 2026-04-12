@@ -32,6 +32,7 @@ parser.add_argument(
 )
 parser.add_argument("--asset_pos", type=float, nargs=3, default=[2.25, 0.0, 0.0], help="Asset spawn position.")
 parser.add_argument("--asset_rot", type=float, nargs=4, default=[0.707, 0.0, 0.0, 0.707], help="Asset rotation (wxyz quat, +90deg Z so drawer fronts face robot).")
+parser.add_argument("--asset_scale", type=float, default=None, help="Extra scale multiplier for small assets (e.g. 5.0 to make scissors 5x bigger).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -145,7 +146,10 @@ def main() -> None:
     from pxr import Usd as _Usd, UsdGeom as _UsdGeom
     _tmp_stage = _Usd.Stage.Open(asset_path)
     _mpu = _UsdGeom.GetStageMetersPerUnit(_tmp_stage)
-    _scale = (_mpu, _mpu, _mpu) if abs(_mpu - 1.0) > 0.01 else None
+    _s = _mpu if abs(_mpu - 1.0) > 0.01 else 1.0
+    if args_cli.asset_scale:
+        _s *= args_cli.asset_scale
+    _scale = (_s, _s, _s) if abs(_s - 1.0) > 0.001 else None
     del _tmp_stage
 
     env_cfg.scene.cabinet = AssetBaseCfg(
