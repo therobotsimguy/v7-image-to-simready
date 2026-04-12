@@ -213,8 +213,9 @@ def run_test(asset_path, num_steps=500, scale=None):
             record(f"T2_{short}", f"Joint range ({short})", "PASS",
                    f"range=[{jinfo['lower']:.2f}, {jinfo['upper']:.2f}]{unit}")
 
-    # T3: Programmatic joint actuation — apply force, measure actual travel
-    # THIS is the PhysX-specific test MuJoCo can't replicate accurately
+    # T3: Programmatic joint actuation — use joint drive target to force open,
+    # then read back simulation state to verify the part actually moved.
+    # THIS is the PhysX-specific test MuJoCo can't replicate accurately.
     if joints_info:
         print(f"\n  [T3] Joint actuation tests ({len(joints_info)} joints)...")
 
@@ -222,89 +223,87 @@ def run_test(asset_path, num_steps=500, scale=None):
         sim.reset()
         short = jinfo["name"].replace("sm_", "").replace("_01", "")
         jtype = jinfo["type"]
-
-        # Get the movable body prim
-        body1_targets = stage.GetPrimAtPath(jinfo["path"]).GetRelationship("physics:body1").GetTargets()
-        if not body1_targets:
-            record(f"T3_{short}", f"Actuation ({short})", "FAIL", "no body1")
-            continue
-
-        body1_prim = stage.GetPrimAtPath(body1_targets[0])
-        if not body1_prim:
-            record(f"T3_{short}", f"Actuation ({short})", "FAIL", "body1 not found")
-            continue
-
-        # Read initial position
-        xf_init = UsdGeom.Xformable(body1_prim)
-        l2w_init = xf_init.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-        pos_init = l2w_init.ExtractTranslation()
-
-        # Apply external force to the movable body for 3 seconds
-        # Direction: along joint axis for prismatic, tangent for revolute
-        axis = jinfo["axis"]
-        axis_vec = {"X": (1,0,0), "Y": (0,1,0), "Z": (0,0,1)}.get(axis, (0,1,0))
-
-        # Determine force direction from limits
         lo, hi = jinfo["lower"], jinfo["upper"]
-        if abs(lo) > abs(hi):
-            direction = -1.0  # push toward lower limit
-        else:
-            direction = 1.0   # push toward upper limit
 
-        if "Prismatic" in jtype:
-            force_magnitude = 50.0  # 50N push
-            force = [axis_vec[i] * force_magnitude * direction for i in range(3)]
-            torque = [0, 0, 0]
-        else:
-            force = [0, 0, 0]
-            torque_magnitude = 20.0  # 20Nm torque
-            torque = [axis_vec[i] * torque_magnitude * direction for i in range(3)]
+        # Set joint drive to push toward the limit with larger magnitude
+        joint_prim = stage.GetPrimAtPath(jinfo["path"])
+        if not joint_prim:
+            record(f"T3_{short}", f"Actuation ({short})", "FAIL", "joint not found")
+            continue
 
-        # Simulate 3 seconds with force applied
-        for step in range(360):  # 3 seconds at 120Hz
-            # Apply force via USD attribute (PhysX reads this each step)
-            if any(f != 0 for f in force):
-                body1_prim.CreateAttribute("physxRigidBody:externalForce",
-                    Sdf.ValueTypeNames.Float3).Set(tuple(force))
-            if any(t != 0 for t in torque):
-                body1_prim.CreateAttribute("physxRigidBody:externalTorque",
-                    Sdf.ValueTypeNames.Float3).Set(tuple(torque))
+        # Set drive target to max extension
+        target = lo if abs(lo) > abs(hi) else hi
+        drive_type = "angular" if "Revolute" in jtype else "linear"
+
+        # Temporarily increase drive stiffness to force the joint open
+        drive_api = UsdPhysics.DriveAPI(joint_prim, drive_type)
+        old_stiffness = drive_api.GetStiffnessAttr().Get() if drive_api.GetStiffnessAttr() else 0
+        old_damping = drive_api.GetDampingAttr().Get() if drive_api.GetDampingAttr() else 2.0
+
+        # High stiffness drives the joint to target position
+        drive_api.GetStiffnessAttr().Set(100.0)
+        drive_api.GetDampingAttr().Set(10.0)
+
+        # Set target position
+        if "Revolute" in jtype:
+            joint_prim.CreateAttribute("drive:angular:physics:targetPosition",
+                Sdf.ValueTypeNames.Float).Set(float(target))
+        else:
+            joint_prim.CreateAttribute("drive:linear:physics:targetPosition",
+                Sdf.ValueTypeNames.Float).Set(float(target))
+
+        # Get movable body for position tracking
+        body1_targets = joint_prim.GetRelationship("physics:body1").GetTargets()
+        body1_prim = stage.GetPrimAtPath(body1_targets[0]) if body1_targets else None
+
+        # Read initial position from simulation
+        for _ in range(10):  # settle
             sim.step()
 
-        # Clear forces
-        try:
-            body1_prim.CreateAttribute("physxRigidBody:externalForce",
-                Sdf.ValueTypeNames.Float3).Set((0, 0, 0))
-            body1_prim.CreateAttribute("physxRigidBody:externalTorque",
-                Sdf.ValueTypeNames.Float3).Set((0, 0, 0))
-        except:
-            pass
+        xf_body = UsdGeom.Xformable(body1_prim) if body1_prim else None
+        pos_init = None
+        if xf_body:
+            try:
+                pos_init = xf_body.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+            except:
+                pass
+
+        # Simulate 3 seconds — drive pushes joint to target
+        for _ in range(360):
+            sim.step()
 
         # Read final position
-        l2w_final = xf_init.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
-        pos_final = l2w_final.ExtractTranslation()
+        pos_final = None
+        if xf_body:
+            try:
+                pos_final = xf_body.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
+            except:
+                pass
 
-        displacement = ((pos_final[0]-pos_init[0])**2 +
-                       (pos_final[1]-pos_init[1])**2 +
-                       (pos_final[2]-pos_init[2])**2)**0.5
+        # Restore original drive params
+        drive_api.GetStiffnessAttr().Set(old_stiffness)
+        drive_api.GetDampingAttr().Set(old_damping)
 
-        limit_range = abs(hi - lo)
-        if "Revolute" in jtype:
-            import math
-            limit_range_m = limit_range * math.pi / 180.0 * 0.1  # rough arc length at 10cm
+        # Measure displacement
+        if pos_init and pos_final:
+            displacement = ((pos_final[0]-pos_init[0])**2 +
+                           (pos_final[1]-pos_init[1])**2 +
+                           (pos_final[2]-pos_init[2])**2)**0.5
+        else:
+            displacement = 0
 
         if displacement < 0.001:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL",
-                   f"didn't move ({displacement:.4f}m) — jammed or force too low",
-                   {"displacement": displacement, "force": force, "torque": torque})
+                   f"didn't move ({displacement:.4f}m) — jammed or collision blocked",
+                   {"displacement": displacement, "target": target})
         elif displacement < 0.005:
             record(f"T3_{short}", f"Actuation ({short})", "WARN",
                    f"barely moved ({displacement:.4f}m) — high resistance",
-                   {"displacement": displacement})
+                   {"displacement": displacement, "target": target})
         else:
             record(f"T3_{short}", f"Actuation ({short})", "PASS",
-                   f"moved {displacement:.4f}m under force",
-                   {"displacement": displacement})
+                   f"moved {displacement:.3f}m (target={target:.2f})",
+                   {"displacement": displacement, "target": target})
 
     # T4: Collision penetration — check if parts clip through each other
     print(f"\n  [T4] Collision integrity...")
