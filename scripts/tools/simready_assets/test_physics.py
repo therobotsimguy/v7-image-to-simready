@@ -258,6 +258,7 @@ def run_test(asset_path, num_steps=500, scale=None):
                 rigid_obj.update(sim.get_physics_dt())
 
             pos_init = rigid_obj.data.root_pos_w[0].cpu().numpy().copy()
+            quat_init = rigid_obj.data.root_quat_w[0].cpu().numpy().copy()
 
             # Apply force: push along joint axis
             axis = jinfo["axis"]
@@ -286,22 +287,31 @@ def run_test(asset_path, num_steps=500, scale=None):
                 torch.zeros(1, n_bodies, 3), torch.zeros(1, n_bodies, 3))
 
             pos_final = rigid_obj.data.root_pos_w[0].cpu().numpy().copy()
+            quat_final = rigid_obj.data.root_quat_w[0].cpu().numpy().copy()
 
-            displacement = float(np.linalg.norm(pos_final - pos_init))
+            # Measure both translation AND rotation
+            pos_displacement = float(np.linalg.norm(pos_final - pos_init))
+            # Quaternion difference: dot product = cos(half_angle)
+            quat_dot = abs(float(np.dot(quat_init, quat_final)))
+            quat_dot = min(quat_dot, 1.0)  # clamp for numerical safety
+            import math
+            angle_deg = math.degrees(2 * math.acos(quat_dot)) if quat_dot < 1.0 else 0.0
+            # Use whichever is larger: translation or rotation-equivalent
+            displacement = max(pos_displacement, angle_deg * 0.001)  # 1mm per degree as proxy
 
         except Exception as e:
             record(f"T3_{short}", f"Actuation ({short})", "WARN", f"RigidObject error: {e}")
             continue
 
-        if displacement < 0.001:
+        if displacement < 0.001 and angle_deg < 0.5:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL",
-                   f"didn't move ({displacement:.4f}m) — jammed or collision blocked")
-        elif displacement < 0.005:
+                   f"didn't move (pos={pos_displacement:.4f}m, rot={angle_deg:.1f}°) — jammed")
+        elif displacement < 0.005 and angle_deg < 2.0:
             record(f"T3_{short}", f"Actuation ({short})", "WARN",
-                   f"barely moved ({displacement:.4f}m) — high resistance")
+                   f"barely moved (pos={pos_displacement:.4f}m, rot={angle_deg:.1f}°)")
         else:
             record(f"T3_{short}", f"Actuation ({short})", "PASS",
-                   f"moved {displacement:.3f}m under force")
+                   f"moved (pos={pos_displacement:.3f}m, rot={angle_deg:.1f}°)")
 
     # T4: Collision penetration — check if parts clip through each other
     print(f"\n  [T4] Collision integrity...")
