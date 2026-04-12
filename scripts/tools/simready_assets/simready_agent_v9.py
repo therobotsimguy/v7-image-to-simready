@@ -477,6 +477,25 @@ Test with Franka teleop:
     else:
         print(f"\n[Phase 7] Skipped — output _physics.usd not found")
 
+    # ── Phase 8: Post-build visual verification (V3 enhancement) ──
+    if output_usd:
+        try:
+            from verify_visual import verify_post_build
+            print(f"\n[Phase 8] Post-build visual verification (Blender + Gemini)...")
+            print("-" * 70)
+            vv_result = verify_post_build(str(output_usd), verbose=True)
+            overall = vv_result.get("overall", "UNKNOWN")
+            if overall == "FAIL":
+                print(f"\n  WARNING: Visual verification FAILED")
+                print("  The asset passes audit + behavioral but LOOKS wrong.")
+                print("  Review the issues above.")
+            elif overall == "PASS":
+                print(f"\n  Visual verification: PASS")
+        except ImportError:
+            print(f"\n[Phase 8] Skipped — verify_visual.py not available")
+        except Exception as e:
+            print(f"\n[Phase 8] Visual verification error: {e}")
+
     print(f"\n{'=' * 70}")
     print("  V9 Pipeline Complete")
     print(f"{'=' * 70}")

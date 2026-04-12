@@ -475,18 +475,27 @@ def classify_with_openai(hierarchy_text, model=None):
         print("ERROR: Set OPENAI_API_KEY or add to scripts/tools/api_keys.json")
         sys.exit(1)
     client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Classify this USD hierarchy:\n\n{hierarchy_text}"},
-        ],
-        temperature=0.0,
-    )
-    text = response.choices[0].message.content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(text)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Classify this USD hierarchy:\n\n{hierarchy_text}"},
+                ],
+                temperature=0.0,
+            )
+            text = response.choices[0].message.content.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            result = json.loads(text)
+            if "body" in result and "parts" in result:
+                return result
+            print(f"  Retry {attempt + 1}/{max_retries}: missing 'body' or 'parts' in response")
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            print(f"  Retry {attempt + 1}/{max_retries}: {type(e).__name__}: {e}")
+    raise ValueError(f"LLM classification failed after {max_retries} retries (F04)")
 
 
 def classify_with_anthropic(hierarchy_text, model=None):
@@ -502,19 +511,28 @@ def classify_with_anthropic(hierarchy_text, model=None):
         print("ERROR: Set ANTHROPIC_API_KEY or add to scripts/tools/api_keys.json")
         sys.exit(1)
     client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": f"Classify this USD hierarchy:\n\n{hierarchy_text}"},
-        ],
-        temperature=0.0,
-    )
-    text = response.content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(text)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {"role": "user", "content": f"Classify this USD hierarchy:\n\n{hierarchy_text}"},
+                ],
+                temperature=0.0,
+            )
+            text = response.content[0].text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            result = json.loads(text)
+            if "body" in result and "parts" in result:
+                return result
+            print(f"  Retry {attempt + 1}/{max_retries}: missing 'body' or 'parts' in response")
+        except (json.JSONDecodeError, IndexError, KeyError) as e:
+            print(f"  Retry {attempt + 1}/{max_retries}: {type(e).__name__}: {e}")
+    raise ValueError(f"LLM classification failed after {max_retries} retries (F04)")
 
 
 def classify_parts(stage, provider="anthropic", model=None):
