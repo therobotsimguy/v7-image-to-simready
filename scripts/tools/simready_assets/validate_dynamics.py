@@ -31,24 +31,30 @@ from pathlib import Path
 # ═══════════════════════════════════════════════════════════════════
 
 def convert_usd_to_urdf(usd_path: str, output_dir: str) -> str:
-    """Convert USD to URDF, strip meshes for dynamics-only validation."""
+    """Convert USD to URDF with collision meshes for full physics validation."""
+    import glob
+    import shutil
     from nvidia.srl.from_usd.to_urdf import UsdToUrdf
 
     urdf_path = os.path.join(output_dir, "robot.urdf")
     converter = UsdToUrdf.init_from_file(usd_path)
     converter.save_to_file(urdf_path)
 
-    # Strip mesh references — MuJoCo only needs joints, mass, inertia
-    # for behavioral validation. This avoids mesh file path issues.
-    tree = ET.parse(urdf_path)
-    root = tree.getroot()
-    for link in root.findall("link"):
-        for tag in ["visual", "collision"]:
-            for elem in link.findall(tag):
-                link.remove(elem)
-    stripped_path = os.path.join(output_dir, "robot_dynamics.urdf")
-    tree.write(stripped_path, xml_declaration=True)
-    return stripped_path
+    # Move OBJ meshes from meshes/ to URDF directory and fix paths.
+    # MuJoCo resolves mesh filenames from CWD, not from URDF location,
+    # and strips directory prefixes.
+    meshes_dir = os.path.join(output_dir, "meshes")
+    if os.path.exists(meshes_dir):
+        for f in glob.glob(os.path.join(meshes_dir, "*.obj")):
+            shutil.move(f, output_dir)
+    # Update URDF to remove meshes/ prefix
+    with open(urdf_path) as f:
+        urdf_text = f.read()
+    urdf_text = urdf_text.replace('filename="meshes/', 'filename="')
+    with open(urdf_path, 'w') as f:
+        f.write(urdf_text)
+
+    return urdf_path
 
 
 def parse_urdf_joints(urdf_path: str) -> list:
@@ -275,7 +281,7 @@ def validate(usd_path: str, verbose: bool = True, output_json: bool = False) -> 
     if verbose:
         print(f"\n  V2 Behavioral Validation")
         print(f"  Input: {usd_path}")
-        print(f"  Engine: MuJoCo (CPU, headless)")
+        print(f"  Engine: MuJoCo (CPU, headless, with collision meshes)")
         print(f"  {'─' * 50}")
 
     # Step 1: Convert USD → URDF
