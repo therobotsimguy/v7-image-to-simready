@@ -65,6 +65,7 @@ description: >-
 | F35 | Collision | Movable part has zero collision — can't interact | Mesh is nested Xform→Xform→Mesh, collision code only checks direct children | Fallback to recursive mesh search when GetChildren() finds no Mesh |
 | F36 | Collision | Gripper gap from robot finger convexHull | Franka finger.stl is concave, hull bloats 66% | Apply convexDecomposition on finger/hand meshes at runtime |
 | F37 | Limits | Slider part only reaches half its range | Pipeline forced one-directional drawer limits on a bidirectional slider | Detect slider (part spans >90% of body on slide axis) → bidirectional limits |
+| F38 | Hierarchy | Reparented child breaks DCC alignment (trigger exits slot, teeth misalign) | Assembly sub-component reparented as sibling + joint can't replicate parent-child precision | Don't reparent triggers/latches/handles — keep as children of their parent body |
 
 ## Wheel Compound Failures
 
