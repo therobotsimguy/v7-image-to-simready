@@ -244,7 +244,7 @@ if __name__ == "__main__":
     ap.add_argument("--input", required=True, help="Path to USD file")
     args = ap.parse_args()
 
-    from simready_agent_v9 import read_usd_hierarchy
+    from simready_agent import read_usd_hierarchy
     from gemini_vision import render_views
     import tempfile
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-simready_agent_v9.py — V9 SimReady Agent Pipeline
+simready_agent.py — V9 SimReady Agent Pipeline
 
 Agent-driven USD → SimReady conversion using Claude Agent SDK.
 Independent from V8 make_simready.py (calls it as a black-box CLI tool).
 
 Usage:
-  python3 simready_agent_v9.py --input /path/to/asset.usd
-  python3 simready_agent_v9.py --input /path/to/asset.usd --dynamic
+  python3 simready_agent.py --input /path/to/asset.usd
+  python3 simready_agent.py --input /path/to/asset.usd --dynamic
 """
 
 import argparse

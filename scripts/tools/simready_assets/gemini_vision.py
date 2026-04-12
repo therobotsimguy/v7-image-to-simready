@@ -6,7 +6,7 @@ Renders 4 views of a USD asset via Blender, sends to Gemini for
 visual part identification, material detection, and classification
 cross-checking.
 
-Usage (called by simready_agent_v9.py):
+Usage (called by simready_agent.py):
     from gemini_vision import analyze_asset_visually
     report = analyze_asset_visually("/path/to/asset.usd")
 """
@@ -215,7 +215,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     # Read hierarchy for context
-    from simready_agent_v9 import read_usd_hierarchy
+    from simready_agent import read_usd_hierarchy
     hierarchy = read_usd_hierarchy(args.input)
 
     result = analyze_asset_visually(args.input, hierarchy_text=hierarchy)

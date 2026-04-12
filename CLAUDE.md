@@ -1,10 +1,10 @@
 # SimReady Asset Pipeline — V9
 
 ## Architecture
-`[Raw USD] → simready_agent_v9.py → (Gemini vision + Claude classify + make_simready.py + MuJoCo validate) → asset_physics.usd`
+`[Raw USD] → simready_agent.py → (Gemini vision + Claude classify + make_simready.py + MuJoCo validate) → asset_physics.usd`
 
 Key files:
-- `simready_agent_v9.py` (V9 orchestrator — Claude Agent SDK)
+- `simready_agent.py` (V9 orchestrator — Claude Agent SDK)
 - `make_simready.py` (physics engine — called as CLI tool by V9)
 - `validate_dynamics.py` (MuJoCo behavioral validation)
 - `render_views.py` + `gemini_vision.py` (Blender + Gemini visual analysis)
@@ -50,9 +50,9 @@ V9 tested: Refrigerator_B01_01 (7/7 + 20/20 behavioral) | InstrumentTrolley_B (7
 ## Commands
 ```bash
 # V9 full pipeline (classify + apply + validate — recommended)
-python3 scripts/tools/simready_assets/simready_agent_v9.py --input /path/to/asset.usd
+python3 scripts/tools/simready_assets/simready_agent.py --input /path/to/asset.usd
 # V9 dynamic mode (trolleys / draggable body)
-python3 scripts/tools/simready_assets/simready_agent_v9.py --input /path/to/asset.usd --dynamic
+python3 scripts/tools/simready_assets/simready_agent.py --input /path/to/asset.usd --dynamic
 # Franka teleop (shift+drag doors/drawers/wheels)
 ISAACLAB_PATH=/home/msi/IsaacLab ./isaaclab.sh -p scripts/environments/teleoperation/teleop_se3_agent_cinematic.py --asset /path/to/asset_physics.usd --device cpu
 # Behavioral validation only (MuJoCo, headless)
