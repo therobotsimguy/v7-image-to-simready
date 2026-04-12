@@ -218,11 +218,13 @@ def run_test(asset_path, num_steps=500, scale=None):
             record(f"T2_{short}", f"Joint range ({short})", "PASS",
                    f"range=[{jinfo['lower']:.2f}, {jinfo['upper']:.2f}]{unit}")
 
-    # T3: Programmatic joint actuation — use joint drive target to force open,
-    # then read back simulation state to verify the part actually moved.
-    # THIS is the PhysX-specific test MuJoCo can't replicate accurately.
+    # T3: Programmatic joint actuation — use joint drive to force open,
+    # read back from PhysX simulation state via RigidPrim.get_world_poses().
+    # THIS is the PhysX-specific test MuJoCo can't replicate.
     if joints_info:
         print(f"\n  [T3] Joint actuation tests ({len(joints_info)} joints)...")
+
+    from isaacsim.core.prims import RigidPrim
 
     for jinfo in joints_info:
         sim.reset()
@@ -230,26 +232,44 @@ def run_test(asset_path, num_steps=500, scale=None):
         jtype = jinfo["type"]
         lo, hi = jinfo["lower"], jinfo["upper"]
 
-        # Set joint drive to push toward the limit with larger magnitude
         joint_prim = stage.GetPrimAtPath(jinfo["path"])
         if not joint_prim:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL", "joint not found")
             continue
 
-        # Set drive target to max extension
+        # Get movable body path
+        body1_targets = joint_prim.GetRelationship("physics:body1").GetTargets()
+        if not body1_targets:
+            record(f"T3_{short}", f"Actuation ({short})", "FAIL", "no body1")
+            continue
+
+        body1_path = str(body1_targets[0])
+
+        # Create RigidPrim view to read PhysX simulation state
+        try:
+            rigid_view = RigidPrim(prim_paths_expr=body1_path, name=f"test_{short}")
+            rigid_view.initialize()
+        except Exception as e:
+            record(f"T3_{short}", f"Actuation ({short})", "WARN", f"can't create view: {e}")
+            continue
+
+        # Settle and read initial position from PhysX
+        for _ in range(30):
+            sim.step()
+        pos_init, _ = rigid_view.get_world_poses()
+        pos_init = pos_init[0].cpu().numpy() if hasattr(pos_init[0], 'cpu') else pos_init[0]
+
+        # Set drive to push joint to max extension
         target = lo if abs(lo) > abs(hi) else hi
         drive_type = "angular" if "Revolute" in jtype else "linear"
-
-        # Temporarily increase drive stiffness to force the joint open
         drive_api = UsdPhysics.DriveAPI(joint_prim, drive_type)
+
         old_stiffness = drive_api.GetStiffnessAttr().Get() if drive_api.GetStiffnessAttr() else 0
         old_damping = drive_api.GetDampingAttr().Get() if drive_api.GetDampingAttr() else 2.0
 
-        # High stiffness drives the joint to target position
         drive_api.GetStiffnessAttr().Set(100.0)
         drive_api.GetDampingAttr().Set(10.0)
 
-        # Set target position
         if "Revolute" in jtype:
             joint_prim.CreateAttribute("drive:angular:physics:targetPosition",
                 Sdf.ValueTypeNames.Float).Set(float(target))
@@ -257,45 +277,22 @@ def run_test(asset_path, num_steps=500, scale=None):
             joint_prim.CreateAttribute("drive:linear:physics:targetPosition",
                 Sdf.ValueTypeNames.Float).Set(float(target))
 
-        # Get movable body for position tracking
-        body1_targets = joint_prim.GetRelationship("physics:body1").GetTargets()
-        body1_prim = stage.GetPrimAtPath(body1_targets[0]) if body1_targets else None
-
-        # Read initial position from simulation
-        for _ in range(10):  # settle
-            sim.step()
-
-        xf_body = UsdGeom.Xformable(body1_prim) if body1_prim else None
-        pos_init = None
-        if xf_body:
-            try:
-                pos_init = xf_body.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
-            except:
-                pass
-
         # Simulate 3 seconds — drive pushes joint to target
         for _ in range(360):
             sim.step()
 
-        # Read final position
-        pos_final = None
-        if xf_body:
-            try:
-                pos_final = xf_body.ComputeLocalToWorldTransform(Usd.TimeCode.Default()).ExtractTranslation()
-            except:
-                pass
+        # Read final position from PhysX simulation state
+        pos_final, _ = rigid_view.get_world_poses()
+        pos_final = pos_final[0].cpu().numpy() if hasattr(pos_final[0], 'cpu') else pos_final[0]
 
         # Restore original drive params
         drive_api.GetStiffnessAttr().Set(old_stiffness)
         drive_api.GetDampingAttr().Set(old_damping)
 
         # Measure displacement
-        if pos_init and pos_final:
-            displacement = ((pos_final[0]-pos_init[0])**2 +
-                           (pos_final[1]-pos_init[1])**2 +
-                           (pos_final[2]-pos_init[2])**2)**0.5
-        else:
-            displacement = 0
+        displacement = float(((pos_final[0]-pos_init[0])**2 +
+                       (pos_final[1]-pos_init[1])**2 +
+                       (pos_final[2]-pos_init[2])**2)**0.5)
 
         if displacement < 0.001:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL",
