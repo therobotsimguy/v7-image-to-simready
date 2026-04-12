@@ -218,13 +218,13 @@ def run_test(asset_path, num_steps=500, scale=None):
             record(f"T2_{short}", f"Joint range ({short})", "PASS",
                    f"range=[{jinfo['lower']:.2f}, {jinfo['upper']:.2f}]{unit}")
 
-    # T3: Programmatic joint actuation — use joint drive to force open,
-    # read back from PhysX simulation state via RigidPrim.get_world_poses().
-    # THIS is the PhysX-specific test MuJoCo can't replicate.
+    # T3: Programmatic joint actuation — apply external force via RigidObject API,
+    # read back from PhysX via RigidObject.data.root_pos_w.
+    # Pattern from Isaac Lab tutorial: write_data_to_sim() + step() + update()
     if joints_info:
         print(f"\n  [T3] Joint actuation tests ({len(joints_info)} joints)...")
 
-    from isaacsim.core.prims import RigidPrim
+    from isaaclab.assets import RigidObject, RigidObjectCfg
 
     for jinfo in joints_info:
         sim.reset()
@@ -237,7 +237,6 @@ def run_test(asset_path, num_steps=500, scale=None):
             record(f"T3_{short}", f"Actuation ({short})", "FAIL", "joint not found")
             continue
 
-        # Get movable body path
         body1_targets = joint_prim.GetRelationship("physics:body1").GetTargets()
         if not body1_targets:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL", "no body1")
@@ -245,67 +244,60 @@ def run_test(asset_path, num_steps=500, scale=None):
 
         body1_path = str(body1_targets[0])
 
-        # Create RigidPrim view to read PhysX simulation state
+        # Create RigidObject to track this body via Isaac Lab API
         try:
-            rigid_view = RigidPrim(prim_paths_expr=body1_path, name=f"test_{short}")
-            rigid_view.initialize()
+            rigid_cfg = RigidObjectCfg(prim_path=body1_path)
+            rigid_obj = RigidObject(cfg=rigid_cfg)
+            sim.reset()
+            rigid_obj.reset()
+
+            # Settle
+            for _ in range(30):
+                rigid_obj.write_data_to_sim()
+                sim.step()
+                rigid_obj.update(sim.get_physics_dt())
+
+            pos_init = rigid_obj.data.root_pos_w[0].cpu().numpy().copy()
+
+            # Apply force: push along joint axis
+            axis = jinfo["axis"]
+            axis_vec = {"X": [1,0,0], "Y": [0,1,0], "Z": [0,0,1]}.get(axis, [0,1,0])
+            direction = -1.0 if abs(lo) > abs(hi) else 1.0
+
+            if "Prismatic" in jtype:
+                force = torch.tensor([[axis_vec[0]*50*direction, axis_vec[1]*50*direction, axis_vec[2]*50*direction]], device="cpu")
+                torque = torch.zeros(1, 3, device="cpu")
+            else:
+                force = torch.zeros(1, 3, device="cpu")
+                torque = torch.tensor([[axis_vec[0]*20*direction, axis_vec[1]*20*direction, axis_vec[2]*20*direction]], device="cpu")
+
+            # Apply force for 3 seconds
+            rigid_obj.set_external_force_and_torque(force, torque)
+            for _ in range(360):
+                rigid_obj.write_data_to_sim()
+                sim.step()
+                rigid_obj.update(sim.get_physics_dt())
+
+            # Clear force
+            rigid_obj.set_external_force_and_torque(torch.zeros(1,3), torch.zeros(1,3))
+
+            pos_final = rigid_obj.data.root_pos_w[0].cpu().numpy().copy()
+
+            displacement = float(np.linalg.norm(pos_final - pos_init))
+
         except Exception as e:
-            record(f"T3_{short}", f"Actuation ({short})", "WARN", f"can't create view: {e}")
+            record(f"T3_{short}", f"Actuation ({short})", "WARN", f"RigidObject error: {e}")
             continue
-
-        # Settle and read initial position from PhysX
-        for _ in range(30):
-            sim.step()
-        pos_init, _ = rigid_view.get_world_poses()
-        pos_init = pos_init[0].cpu().numpy() if hasattr(pos_init[0], 'cpu') else pos_init[0]
-
-        # Set drive to push joint to max extension
-        target = lo if abs(lo) > abs(hi) else hi
-        drive_type = "angular" if "Revolute" in jtype else "linear"
-        drive_api = UsdPhysics.DriveAPI(joint_prim, drive_type)
-
-        old_stiffness = drive_api.GetStiffnessAttr().Get() if drive_api.GetStiffnessAttr() else 0
-        old_damping = drive_api.GetDampingAttr().Get() if drive_api.GetDampingAttr() else 2.0
-
-        drive_api.GetStiffnessAttr().Set(100.0)
-        drive_api.GetDampingAttr().Set(10.0)
-
-        if "Revolute" in jtype:
-            joint_prim.CreateAttribute("drive:angular:physics:targetPosition",
-                Sdf.ValueTypeNames.Float).Set(float(target))
-        else:
-            joint_prim.CreateAttribute("drive:linear:physics:targetPosition",
-                Sdf.ValueTypeNames.Float).Set(float(target))
-
-        # Simulate 3 seconds — drive pushes joint to target
-        for _ in range(360):
-            sim.step()
-
-        # Read final position from PhysX simulation state
-        pos_final, _ = rigid_view.get_world_poses()
-        pos_final = pos_final[0].cpu().numpy() if hasattr(pos_final[0], 'cpu') else pos_final[0]
-
-        # Restore original drive params
-        drive_api.GetStiffnessAttr().Set(old_stiffness)
-        drive_api.GetDampingAttr().Set(old_damping)
-
-        # Measure displacement
-        displacement = float(((pos_final[0]-pos_init[0])**2 +
-                       (pos_final[1]-pos_init[1])**2 +
-                       (pos_final[2]-pos_init[2])**2)**0.5)
 
         if displacement < 0.001:
             record(f"T3_{short}", f"Actuation ({short})", "FAIL",
-                   f"didn't move ({displacement:.4f}m) — jammed or collision blocked",
-                   {"displacement": displacement, "target": target})
+                   f"didn't move ({displacement:.4f}m) — jammed or collision blocked")
         elif displacement < 0.005:
             record(f"T3_{short}", f"Actuation ({short})", "WARN",
-                   f"barely moved ({displacement:.4f}m) — high resistance",
-                   {"displacement": displacement, "target": target})
+                   f"barely moved ({displacement:.4f}m) — high resistance")
         else:
             record(f"T3_{short}", f"Actuation ({short})", "PASS",
-                   f"moved {displacement:.3f}m (target={target:.2f})",
-                   {"displacement": displacement, "target": target})
+                   f"moved {displacement:.3f}m under force")
 
     # T4: Collision penetration — check if parts clip through each other
     print(f"\n  [T4] Collision integrity...")
