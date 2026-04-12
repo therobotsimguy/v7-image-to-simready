@@ -1465,10 +1465,12 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
                         is_slider = True
 
             if is_slider:
-                # Bidirectional: generous limits both ways from rest
-                lower_m = -travel
-                upper_m = travel * 0.5
-                print(f"    (slider detected — bidirectional limits [{lower_m:.3f}, {upper_m:.3f}])")
+                # Bidirectional: GENEROUS limits both ways. Don't try to compute
+                # exact range — the physical geometry (collision) is the real
+                # constraint. Tight limits only cut off useful range. (F37)
+                lower_m = -depth * 2.0
+                upper_m = depth * 0.6
+                print(f"    (slider detected — generous bidirectional [{lower_m:.3f}, {upper_m:.3f}])")
             elif bbox and body_bbox:
                 # Drawer: one direction, face toward body exterior
                 body_center_ax = (body_bbox[0][axis_idx] + body_bbox[1][axis_idx]) / 2
