@@ -91,8 +91,13 @@ def run_test(asset_path, num_steps=500, scale=None):
     ground_cfg = sim_utils.GroundPlaneCfg()
     ground_cfg.func("/World/ground", ground_cfg)
 
-    # Spawn asset
-    _tmp_stage = Usd.Stage.Open(asset_path)
+    # Spawn asset (use a temp copy so T3 drive changes don't corrupt the original)
+    import shutil, tempfile
+    tmp_dir = tempfile.mkdtemp(prefix="physx_test_")
+    tmp_asset = os.path.join(tmp_dir, os.path.basename(asset_path))
+    shutil.copy2(asset_path, tmp_asset)
+
+    _tmp_stage = Usd.Stage.Open(tmp_asset)
     _mpu = UsdGeom.GetStageMetersPerUnit(_tmp_stage)
     _s = _mpu if abs(_mpu - 1.0) > 0.01 else 1.0
     if scale:
@@ -100,7 +105,7 @@ def run_test(asset_path, num_steps=500, scale=None):
     _scale = (_s, _s, _s) if abs(_s - 1.0) > 0.001 else None
     del _tmp_stage
 
-    asset_cfg = UsdFileCfg(usd_path=asset_path, scale=_scale)
+    asset_cfg = UsdFileCfg(usd_path=tmp_asset, scale=_scale)
     prim_path = "/World/TestAsset"
     asset_cfg.func(prim_path, asset_cfg, translation=(0.0, 0.0, 0.5))
 
