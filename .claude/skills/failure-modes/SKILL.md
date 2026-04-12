@@ -66,6 +66,7 @@ description: >-
 | F36 | Collision | Gripper gap from robot finger convexHull | Franka finger.stl is concave, hull bloats 66% | Apply convexDecomposition on finger/hand meshes at runtime |
 | F37 | Limits | Slider part only reaches half its range | Pipeline forced one-directional drawer limits on a bidirectional slider | Detect slider (part spans >90% of body on slide axis) → bidirectional limits |
 | F38 | Hierarchy | Reparented child breaks DCC alignment (trigger exits slot, teeth misalign) | Assembly sub-component reparented as sibling + joint can't replicate parent-child precision | Don't reparent triggers/latches/handles — keep as children of their parent body |
+| F39 | Position | Structural mesh in movable travel zone (wheels where drawer opens) | DCC model placed decorative parts in movable path | B8 detects overlap, auto-hides relocatable parts (wheels/bolts/clips) |
 
 ## Wheel Compound Failures
 

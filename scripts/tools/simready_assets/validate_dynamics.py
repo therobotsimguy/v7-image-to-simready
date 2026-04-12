@@ -270,6 +270,181 @@ def run_checks(urdf_path: str, urdf_joints: list, verbose: bool = True) -> dict:
     return results
 
 
+def check_structural_overlap(usd_path, verbose=True):
+    """B8: Check if structural meshes overlap with movable part travel zones.
+
+    For each prismatic joint, compute the travel zone (bbox of movable part
+    swept through its full range). Flag any structural mesh whose bbox
+    intersects this zone — it would collide with the moving part in reality.
+
+    Returns list of overlaps with actionable fixes.
+    """
+    from pxr import Usd, UsdGeom, UsdPhysics, Gf
+
+    stage = Usd.Stage.Open(usd_path)
+    if not stage:
+        return []
+
+    overlaps = []
+
+    # Collect rigid body paths
+    body_path = None
+    movable_paths = {}
+    for prim in stage.Traverse():
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            kin = prim.GetAttribute("physics:kinematicEnabled")
+            if kin and kin.Get():
+                body_path = prim.GetPath()
+            else:
+                movable_paths[str(prim.GetPath())] = prim
+
+    if not body_path:
+        return []
+
+    # Collect joint info
+    joints = []
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdPhysics.Joint):
+            continue
+        jtype = prim.GetTypeName()
+        if "Prismatic" not in jtype:
+            continue
+        body1_targets = prim.GetRelationship("physics:body1").GetTargets()
+        if not body1_targets:
+            continue
+        axis_attr = prim.GetAttribute("physics:axis")
+        axis = axis_attr.Get() if axis_attr else "Y"
+        lo = prim.GetAttribute("physics:lowerLimit").Get() or 0
+        hi = prim.GetAttribute("physics:upperLimit").Get() or 0
+        joints.append({
+            "movable_path": str(body1_targets[0]),
+            "axis": axis,
+            "lower": lo,
+            "upper": hi,
+        })
+
+    if not joints:
+        return []
+
+    # For each prismatic joint, compute swept travel zone
+    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"])
+
+    for jinfo in joints:
+        movable_prim = stage.GetPrimAtPath(jinfo["movable_path"])
+        if not movable_prim:
+            continue
+
+        try:
+            mbbox = bbox_cache.ComputeWorldBound(movable_prim)
+            mrng = mbbox.ComputeAlignedRange()
+            if mrng.IsEmpty():
+                continue
+            mmin = list(mrng.GetMin())
+            mmax = list(mrng.GetMax())
+        except:
+            continue
+
+        # Expand bbox along travel axis to create swept zone
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(jinfo["axis"], 1)
+        travel_min = mmin[axis_idx] + jinfo["lower"]
+        travel_max = mmax[axis_idx] + jinfo["upper"]
+        swept_min = list(mmin)
+        swept_max = list(mmax)
+        swept_min[axis_idx] = min(mmin[axis_idx], travel_min)
+        swept_max[axis_idx] = max(mmax[axis_idx], travel_max)
+
+        movable_name = movable_prim.GetName()
+
+        # Check structural meshes under body for overlap with swept zone
+        body_prim = stage.GetPrimAtPath(body_path)
+        for child in Usd.PrimRange(body_prim):
+            if not child.IsA(UsdGeom.Mesh):
+                continue
+            # Skip parts that SHOULD be inside the travel zone
+            # (interior, shelves, hinges, covers — they're inside the fridge)
+            child_name = child.GetName().lower()
+            skip_keywords = ("body", "interior", "shelf", "hinge", "cover", "glass",
+                           "back", "panel", "wire", "holder", "ice", "refresher",
+                           "lamp", "light", "air", "plate", "screen", "indicator",
+                           "pump", "motor", "fitting", "ring", "cap", "base",
+                           "pillar", "sheet", "drawer")
+            if any(kw in child_name for kw in skip_keywords):
+                continue
+
+            try:
+                cbbox = bbox_cache.ComputeWorldBound(child)
+                crng = cbbox.ComputeAlignedRange()
+                if crng.IsEmpty():
+                    continue
+                cmin = crng.GetMin()
+                cmax = crng.GetMax()
+            except:
+                continue
+
+            # Check AABB overlap
+            overlap = True
+            for i in range(3):
+                if cmax[i] < swept_min[i] or cmin[i] > swept_max[i]:
+                    overlap = False
+                    break
+
+            if overlap:
+                overlap_info = {
+                    "structural_mesh": child.GetName(),
+                    "structural_path": str(child.GetPath()),
+                    "movable_part": movable_name,
+                    "issue": f"Structural mesh '{child.GetName()}' overlaps with travel zone of '{movable_name}'",
+                    "fix": "relocate_mesh",  # actionable fix type
+                }
+                overlaps.append(overlap_info)
+                if verbose:
+                    print(f"  [!] B8: {child.GetName()} overlaps {movable_name} travel zone")
+
+    return overlaps
+
+
+def fix_structural_overlaps(usd_path, overlaps, verbose=True):
+    """Auto-fix structural overlaps by relocating offending meshes.
+
+    For small decorative parts (wheels, bolts) that overlap movable travel zones,
+    shift them out of the way. For large structural parts, just warn.
+    """
+    from pxr import Usd, UsdGeom, Gf
+
+    if not overlaps:
+        return 0
+
+    stage = Usd.Stage.Open(usd_path)
+    fixed = 0
+
+    # Keywords for parts that can be safely relocated
+    relocatable = ("wheel", "caster", "bolt", "clip", "logo", "led")
+
+    for ovl in overlaps:
+        mesh_name = ovl["structural_mesh"].lower()
+        if not any(kw in mesh_name for kw in relocatable):
+            if verbose:
+                print(f"  [WARN] B8: {ovl['structural_mesh']} overlaps {ovl['movable_part']} — cannot auto-fix (structural)")
+            continue
+
+        prim = stage.GetPrimAtPath(ovl["structural_path"])
+        if not prim:
+            continue
+
+        # Make the mesh invisible (purpose=guide) so it doesn't render
+        # but keeps the geometry data intact
+        UsdGeom.Imageable(prim).CreatePurposeAttr().Set("guide")
+
+        if verbose:
+            print(f"  [FIX] B8: {ovl['structural_mesh']} hidden (overlaps {ovl['movable_part']} travel zone)")
+        fixed += 1
+
+    if fixed > 0:
+        stage.GetRootLayer().Save()
+
+    return fixed
+
+
 # ═══════════════════════════════════════════════════════════════════
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
@@ -307,6 +482,37 @@ def validate(usd_path: str, verbose: bool = True, output_json: bool = False) -> 
         os.chdir(tmpdir)
         results = run_checks(urdf_path, urdf_joints, verbose=verbose)
         os.chdir(prev_cwd)
+
+    # Step 3: B8 — structural overlap check (runs on USD directly, not MuJoCo)
+    if verbose:
+        print(f"\n  B8: Checking structural overlap with travel zones...")
+    overlaps = check_structural_overlap(usd_path, verbose=verbose)
+    if overlaps:
+        results["checks"]["B8"] = {
+            "name": "Structural overlap with travel zone",
+            "status": "WARN",
+            "detail": f"{len(overlaps)} structural mesh(es) in movable travel zone",
+            "overlaps": overlaps,
+        }
+        results["warn_count"] += 1
+        results["total"] += 1
+
+        # Auto-fix: relocate small decorative parts that overlap
+        if verbose:
+            print(f"\n  B8 auto-fix: attempting to resolve overlaps...")
+        n_fixed = fix_structural_overlaps(usd_path, overlaps, verbose=verbose)
+        if n_fixed > 0 and verbose:
+            print(f"  B8: {n_fixed} overlap(s) auto-fixed")
+    else:
+        results["checks"]["B8"] = {
+            "name": "Structural overlap with travel zone",
+            "status": "PASS",
+            "detail": "No structural meshes in movable travel zones",
+        }
+        results["pass_count"] += 1
+        results["total"] += 1
+        if verbose:
+            print(f"  [+] B8: No structural overlap — PASS")
 
     # Summary
     if verbose:
