@@ -174,11 +174,26 @@ def audit(stage):
         c2_detail += f" — {len(bodies_without_colliders)} rigid body(s) have NO colliders: {bodies_without_colliders}"
     results["C2 Collision Shapes"] = {"pass": c2_pass, "detail": c2_detail}
 
-    # C3: Friction Materials
+    # C3: Friction Materials + GripMaterial on handles (F29, F31)
     c3_pass = len(colliders) > 0 and mat_bindings == len(colliders)
     c3_detail = f"{mat_bindings}/{len(colliders)} colliders have material:binding:physics"
     if not colliders:
         c3_detail = "no colliders to bind"
+    # F29/F31: Check that handle meshes exist and have GripMaterial
+    handle_keywords = ("handle", "knob", "grip", "pull", "lever")
+    handle_meshes = []
+    handles_with_grip = 0
+    for prim in stage.Traverse():
+        if prim.IsA(UsdGeom.Mesh) and any(kw in prim.GetName().lower() for kw in handle_keywords):
+            handle_meshes.append(prim.GetName())
+            bind = UsdShade.MaterialBindingAPI(prim)
+            physics_mat = bind.GetDirectBinding("physics")
+            if physics_mat and physics_mat.GetMaterialPath():
+                mat_path = str(physics_mat.GetMaterialPath())
+                if "grip" in mat_path.lower():
+                    handles_with_grip += 1
+    if handle_meshes and handles_with_grip == 0:
+        c3_detail += f" — WARNING: {len(handle_meshes)} handle(s) found but none bound to GripMaterial (F31)"
     results["C3 Friction"] = {"pass": c3_pass, "detail": c3_detail}
 
     # C4: Flat Hierarchy
@@ -224,10 +239,24 @@ def audit(stage):
         c5_detail = "no movable parts — joints N/A"
     results["C5 Joints"] = {"pass": c5_pass, "detail": c5_detail, "na": not has_movables}
 
-    # C6: Joint Drives
+    # C6: Joint Drives + stiffness/damping validation (F18, F32)
     if joints:
         c6_pass = len(drives) >= len(joints)
         c6_detail = f"{len(drives)} drives for {len(joints)} joints"
+        # F18: Check stiffness=0 on all drives (non-zero jams doors)
+        # F32: Check damping>0 on all drives (zero causes oscillation)
+        for prim in stage.Traverse():
+            if prim.IsA(UsdPhysics.Joint):
+                for attr in prim.GetAttributes():
+                    aname = attr.GetName()
+                    if "stiffness" in aname.lower() and "drive" in aname.lower():
+                        val = attr.Get()
+                        if val is not None and float(val) > 0:
+                            c6_detail += f" — WARNING: {prim.GetName()} has stiffness={val} (F18: should be 0)"
+                    if "damping" in aname.lower() and "drive" in aname.lower():
+                        val = attr.Get()
+                        if val is not None and float(val) <= 0:
+                            c6_detail += f" — WARNING: {prim.GetName()} has damping={val} (F32: should be >0)"
     else:
         c6_pass = True
         c6_detail = "no joints — drives N/A"

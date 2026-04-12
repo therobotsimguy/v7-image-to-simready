@@ -140,6 +140,43 @@ def run_checks(urdf_path: str, urdf_joints: list, verbose: bool = True) -> dict:
                 record(f"B1_{short}", f"Travel realism ({short})", "PASS",
                        f"travel={travel:.3f}m")
 
+    # ── B2: Revolute range sanity (F09, F16, F19) ──
+    import math
+    for j in urdf_joints:
+        if j["type"] != "revolute":
+            continue
+        short = j["name"].replace("sm_refrigerator_b01_", "").replace("_joint", "")
+        lo = j.get("lower", 0)
+        hi = j.get("upper", 0)
+        range_deg = abs(hi - lo) * 180 / math.pi
+        # Doors should be 90-150°, wheels unlimited
+        if range_deg > 300 and range_deg < 11000:
+            record(f"B2_{short}", f"Revolute range ({short})", "WARN",
+                   f"range={range_deg:.0f}° — unusually large for a door")
+        elif range_deg < 10:
+            record(f"B2_{short}", f"Revolute range ({short})", "WARN",
+                   f"range={range_deg:.0f}° — too small to be useful")
+        else:
+            record(f"B2_{short}", f"Revolute range ({short})", "PASS",
+                   f"range={range_deg:.0f}°")
+
+    # ── B7: Mass per body sanity (F21, F22, F23) ──
+    for i in range(model.nbody):
+        bname = model.body(i).name
+        if bname == "world":
+            continue
+        mass = model.body_mass[i]
+        short = bname.replace("sm_refrigerator_b01_", "").replace("sm_", "")
+        if mass > 200:
+            record(f"B7_{short}", f"Mass realism ({short})", "WARN",
+                   f"mass={mass:.1f}kg — very heavy")
+        elif mass < 0.01 and mass > 0:
+            record(f"B7_{short}", f"Mass realism ({short})", "WARN",
+                   f"mass={mass:.4f}kg — very light, may blow away")
+        else:
+            record(f"B7_{short}", f"Mass realism ({short})", "PASS",
+                   f"mass={mass:.2f}kg")
+
     # ── B3: Mass matrix stability ──
     # Compute mass matrix via MuJoCo
     mujoco.mj_forward(model, data)
