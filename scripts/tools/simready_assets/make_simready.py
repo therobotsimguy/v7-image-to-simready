@@ -1258,10 +1258,45 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
 
     # Save joint anchors BEFORE reparent — reparenting clears pivot xformOps
     saved_anchors = {}
+    body_bbox = mesh_world_bbox(stage, body_path)
     for name, info in movables.items():
         saved_anchors[name] = get_joint_anchor_world(stage, info["path"])
         anchor = saved_anchors[name]
-        print(f"    anchor {name}: ({anchor[0]:.4f}, {anchor[1]:.4f}, {anchor[2]:.4f})")
+        # Fallback: if anchor is at origin (no pivot xformOp found), compute from
+        # body bbox edge. For prismatic joints: anchor at the body face nearest the
+        # movable part (the slide start point). For revolute: use movable bbox edge.
+        is_zero = all(abs(float(v)) < 1e-6 for v in anchor)
+        if is_zero and body_bbox:
+            part_bbox = mesh_world_bbox(stage, info["path"])
+            if part_bbox:
+                axis = info.get("axis", "Y")
+                axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(axis, 1)
+                jtype = info.get("joint", "prismatic")
+                if jtype == "prismatic":
+                    # For prismatic: anchor at body edge nearest the part's
+                    # jaw/face (the max extent on slide axis). This is where
+                    # the slide starts (q=0 position).
+                    part_jaw = part_bbox[1][axis_idx]
+                    dist_to_min = abs(part_jaw - body_bbox[0][axis_idx])
+                    dist_to_max = abs(part_jaw - body_bbox[1][axis_idx])
+                    edge = body_bbox[1][axis_idx] if dist_to_max < dist_to_min else body_bbox[0][axis_idx]
+                else:
+                    # For revolute: anchor at body edge nearest the part center
+                    part_center = (part_bbox[0][axis_idx] + part_bbox[1][axis_idx]) / 2
+                    body_center = (body_bbox[0][axis_idx] + body_bbox[1][axis_idx]) / 2
+                    edge = body_bbox[0][axis_idx] if part_center < body_center else body_bbox[1][axis_idx]
+                fallback = list(anchor)
+                fallback[axis_idx] = edge
+                # Center on other axes
+                for i in range(3):
+                    if i != axis_idx:
+                        fallback[i] = (part_bbox[0][i] + part_bbox[1][i]) / 2
+                saved_anchors[name] = Gf.Vec3d(*fallback)
+                print(f"    anchor {name}: ({fallback[0]:.4f}, {fallback[1]:.4f}, {fallback[2]:.4f}) (fallback from body edge)")
+            else:
+                print(f"    anchor {name}: ({anchor[0]:.4f}, {anchor[1]:.4f}, {anchor[2]:.4f}) (zero — no fallback)")
+        else:
+            print(f"    anchor {name}: ({anchor[0]:.4f}, {anchor[1]:.4f}, {anchor[2]:.4f})")
 
     # --- C4: Flatten hierarchy ---
     paths_to_move = []
@@ -1303,6 +1338,16 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
 
     # --- C1: Rigid Bodies + Mass ---
     print(f"\n  RIGID BODIES:")
+    # Graspable props: if no movable parts and object is small (<3kg estimated),
+    # make body dynamic so the robot can pick it up. Large furniture stays kinematic.
+    has_movables = len(movables) > 0
+    if not has_movables and not dynamic_body:
+        body_bbox_check = mesh_world_bbox(stage, body_path)
+        if body_bbox_check:
+            est_mass = estimate_mass(body_bbox_check, mpu, density=500)
+            if est_mass < 3.0:
+                dynamic_body = True
+                print(f"    (small object {est_mass:.2f}kg, no joints — auto-dynamic for grasping)")
     body_kinematic = not dynamic_body
     apply_rigid_body(stage, body_path, kinematic=body_kinematic, dynamic_body=dynamic_body)
     body_bbox = mesh_world_bbox(stage, body_path)
@@ -1369,7 +1414,24 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
         elif jtype == "prismatic":
             bbox = mesh_world_bbox(stage, path)
             axis_idx = {"X": 0, "Y": 1, "Z": 2}[axis]
-            depth = abs(bbox[1][axis_idx] - bbox[0][axis_idx]) if bbox else 0.4
+            part_depth = abs(bbox[1][axis_idx] - bbox[0][axis_idx]) if bbox else 0.4
+            body_depth = abs(body_bbox[1][axis_idx] - body_bbox[0][axis_idx]) if body_bbox else part_depth
+            # Use the overlap region between part and body on the slide axis.
+            # For overlapping parts (caliper blade over ruler), the useful travel
+            # is how far the part can slide before exiting the body.
+            if bbox and body_bbox:
+                overlap_min = max(bbox[0][axis_idx], body_bbox[0][axis_idx])
+                overlap_max = min(bbox[1][axis_idx], body_bbox[1][axis_idx])
+                overlap = max(0, overlap_max - overlap_min)
+                if overlap > 0 and overlap < part_depth * 0.95:
+                    # Part overlaps body partially (caliper, sliding tool) —
+                    # use full overlap as travel (not 85%), since the useful
+                    # range IS the overlap region
+                    depth = overlap
+                else:
+                    depth = min(part_depth, body_depth)
+            else:
+                depth = min(part_depth, body_depth)
             # If drawer has rail mechanism meshes, limit travel to maintain
             # rail-track overlap (rail must not fully exit the body track).
             has_rail = False
@@ -1380,13 +1442,35 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
                             kw in child.GetName().lower() for kw in _DRAWER_RAIL_KEYWORDS):
                         has_rail = True
                         break
+            is_overlap_travel = (bbox and body_bbox and overlap > 0 and overlap < part_depth * 0.95)
             if has_rail:
                 travel = depth * 0.45   # ~45% of total depth keeps rail overlapped
                 print(f"    (rail detected — limiting travel to {travel:.3f}m for overlap)")
+            elif is_overlap_travel:
+                travel = depth  # overlap IS the full useful range, no 85% reduction
+                print(f"    (overlap-based travel: {travel:.3f}m = full ruler/slide range)")
             else:
                 travel = depth * 0.85
-            # Pull direction: drawer face is on the side closer to body exterior
+            # Detect slider vs drawer: a slider (caliper, measuring tool)
+            # spans nearly the FULL body length on the slide axis (>70%).
+            # A drawer is much shorter than the body. Sliders need
+            # bidirectional limits; drawers need one-directional.
+            is_slider = False
             if bbox and body_bbox:
+                part_extent = abs(bbox[1][axis_idx] - bbox[0][axis_idx])
+                body_extent = abs(body_bbox[1][axis_idx] - body_bbox[0][axis_idx])
+                if body_extent > 0:
+                    span_ratio = part_extent / body_extent
+                    if span_ratio > 0.9:
+                        is_slider = True
+
+            if is_slider:
+                # Bidirectional: generous limits both ways from rest
+                lower_m = -travel
+                upper_m = travel * 0.5
+                print(f"    (slider detected — bidirectional limits [{lower_m:.3f}, {upper_m:.3f}])")
+            elif bbox and body_bbox:
+                # Drawer: one direction, face toward body exterior
                 body_center_ax = (body_bbox[0][axis_idx] + body_bbox[1][axis_idx]) / 2
                 drawer_center_ax = (bbox[0][axis_idx] + bbox[1][axis_idx]) / 2
                 if drawer_center_ax < body_center_ax:
