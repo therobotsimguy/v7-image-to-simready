@@ -238,6 +238,43 @@ async def run_pipeline(input_usd: str, dynamic: bool = False, max_retries: int =
         print(f"[Phase 1b] Vision analysis failed: {e}")
     print()
 
+    # ── Phase 1c: Object Understanding (V10) ──
+    object_description = ""
+    object_data = {}
+    try:
+        from object_understanding import understand_object
+        print("[Phase 1c] Object understanding (Gemini)...")
+        # Reuse rendered views from Phase 1b if available
+        import glob, tempfile
+        views = glob.glob("/tmp/v9_vision_*/front.png")
+        view_dir = str(Path(views[0]).parent) if views else None
+        rendered = [str(p) for p in Path(view_dir).glob("*.png")] if view_dir else None
+
+        object_data = understand_object(
+            str(input_path), hierarchy_text=hierarchy_text,
+            rendered_views=rendered, verbose=True)
+
+        if "error" not in object_data:
+            lines = ["OBJECT UNDERSTANDING:"]
+            lines.append(f"  Name: {object_data.get('object_name', '?')}")
+            lines.append(f"  Type: {object_data.get('object_type', '?')}")
+            lines.append(f"  Material: {object_data.get('material', '?')} ({object_data.get('material_density_kg_m3', '?')} kg/m³)")
+            lines.append(f"  Mass: {object_data.get('estimated_mass_kg', '?')} kg")
+            lines.append(f"  Articulated: {object_data.get('is_articulated', '?')}")
+            for p in object_data.get("movable_parts", []):
+                bidir = " BIDIRECTIONAL" if p.get("limits_bidirectional") else ""
+                lines.append(f"    {p.get('name','?')} → {p.get('behavior','?')} range={p.get('range_description','?')}{bidir}")
+            notes = object_data.get("special_notes", "")
+            if notes:
+                lines.append(f"  Notes: {notes}")
+            object_description = "\n".join(lines)
+            print()
+    except ImportError:
+        print("[Phase 1c] Skipped — object_understanding.py not available")
+    except Exception as e:
+        print(f"[Phase 1c] Object understanding failed: {e}")
+    print()
+
     # ── Load skills ──
     behaviors_skill = load_skill("simready-behaviors")
     criteria_skill = load_skill("simready-criteria")
@@ -357,6 +394,7 @@ The USD hierarchy has already been extracted:
 {hierarchy_text}
 ```
 {('## Gemini Visual Analysis' + chr(10) + chr(10) + vision_report + chr(10)) if vision_report else ''}
+{('## Object Understanding (V10)' + chr(10) + chr(10) + object_description + chr(10)) if object_description else ''}
 ## Tools Available
 
 - "classifier" agent: Send it the hierarchy, it returns classify.json
@@ -368,7 +406,11 @@ The USD hierarchy has already been extracted:
 
 ### STEP 1: CLASSIFY
 Use the "classifier" agent. Send it the full hierarchy text above.
-Tell it to classify all parts and return JSON in this exact format:
+IMPORTANT: If Object Understanding data is available above, the classifier MUST use it:
+- Use the object's identified behavior ("slider" vs "drawer") for joint classification
+- Use the object's range_meters for travel limits if available
+- If the object is identified as non-articulated, classify all parts as structural
+Tell the classifier to return JSON in this exact format:
 {{"body": "name", "parts": {{"part": {{"class": "movable:revolute", "axis": "Z"}}}}}}
 
 ### STEP 2: SAVE
