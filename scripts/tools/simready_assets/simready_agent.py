@@ -273,6 +273,14 @@ async def run_pipeline(input_usd: str, dynamic: bool = False, max_retries: int =
         print("[Phase 1c] Skipped — object_understanding.py not available")
     except Exception as e:
         print(f"[Phase 1c] Object understanding failed: {e}")
+
+    # Save object data for make_simready.py to use
+    OBJECT_TMP = Path("/tmp/v9_object.json")
+    if object_data and "error" not in object_data:
+        import json as _json
+        with open(OBJECT_TMP, "w") as f:
+            _json.dump(object_data, f, indent=2)
+        print(f"  Object data saved to {OBJECT_TMP}")
     print()
 
     # ── Load skills ──
@@ -417,10 +425,14 @@ Tell the classifier to return JSON in this exact format:
 Parse the classifier's JSON response. Write it to {CLASSIFY_TMP}
 Verify the JSON is valid before saving.
 
+### STEP 2b: SAVE OBJECT DATA
+If Object Understanding data is available, write it to /tmp/v9_object.json
+This passes Gemini's mass and material density to make_simready.py.
+
 ### STEP 3: APPLY PHYSICS
 Run this exact command:
 ```
-python3 {MAKE_SIMREADY} --input {input_path} --fix{dynamic_flag} --classify-json {CLASSIFY_TMP}
+python3 {MAKE_SIMREADY} --input {input_path} --fix{dynamic_flag} --classify-json {CLASSIFY_TMP}{' --object-json /tmp/v9_object.json' if object_data else ''}
 ```
 Capture the full output.
 

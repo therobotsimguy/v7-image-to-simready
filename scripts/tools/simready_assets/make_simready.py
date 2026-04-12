@@ -1293,7 +1293,8 @@ def normalize_to_meters(stage):
     return True
 
 
-def apply_physics(stage, classification, output_usd, dynamic_body=False):
+def apply_physics(stage, classification, output_usd, dynamic_body=False,
+                  gemini_mass=None, gemini_density=None):
     """Phase 3: Apply all missing physics based on classification."""
     default_prim = stage.GetDefaultPrim()
     dp_path = default_prim.GetPath()
@@ -1412,7 +1413,9 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
     # make body dynamic so the robot can pick it up. Large furniture stays kinematic.
     has_movables = len(movables) > 0
     if not has_movables and not dynamic_body:
-        est_mass = estimate_mass_from_mesh(stage, body_path, density=500)
+        est_mass = gemini_mass  # Use Gemini mass if available
+        if not est_mass:
+            est_mass = estimate_mass_from_mesh(stage, body_path, density=500)
         if not est_mass:
             body_bbox_check = mesh_world_bbox(stage, body_path)
             est_mass = estimate_mass(body_bbox_check, mpu, density=500) if body_bbox_check else 999
@@ -1422,35 +1425,59 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
     body_kinematic = not dynamic_body
     apply_rigid_body(stage, body_path, kinematic=body_kinematic, dynamic_body=dynamic_body)
     body_bbox = mesh_world_bbox(stage, body_path)
-    body_density = 80.0 if dynamic_body else 600.0
-    # Try mesh volume for accurate mass, fall back to bbox
-    body_mass_mesh = estimate_mass_from_mesh(stage, body_path, density=body_density)
-    body_mass_bbox = estimate_mass(body_bbox, mpu, density=body_density)
-    if body_mass_mesh:
-        body_mass = body_mass_mesh
-        mass_method = "mesh_vol"
+
+    # Mass estimation priority: Gemini > mesh_volume > bbox
+    use_density = gemini_density if gemini_density else (80.0 if dynamic_body else 600.0)
+
+    if gemini_mass and not movables:
+        # Gemini mass for single-body objects (use directly)
+        body_mass = gemini_mass
+        mass_method = "gemini"
     else:
-        body_mass = body_mass_bbox
-        mass_method = "bbox"
-    if dynamic_body:
+        body_mass_mesh = estimate_mass_from_mesh(stage, body_path, density=use_density)
+        body_mass_bbox = estimate_mass(body_bbox, mpu, density=use_density)
+        if body_mass_mesh:
+            body_mass = body_mass_mesh
+            mass_method = "mesh_vol"
+        else:
+            body_mass = body_mass_bbox
+            mass_method = "bbox"
+    if dynamic_body and mass_method != "gemini":
         body_mass = max(5.0, min(100.0, body_mass))
     apply_mass(stage, body_path, body_mass)
     body_mode = "dynamic" if dynamic_body else "kinematic"
-    print(f"    body: {body_mode}, mass={body_mass:.1f}kg ({mass_method})")
+    print(f"    body: {body_mode}, mass={body_mass:.1f}kg ({mass_method}, density={use_density})")
 
+    # Compute per-part mass: distribute Gemini total mass across parts by volume ratio
+    part_density = gemini_density if gemini_density else 500.0
     for name, info in movables.items():
         path = info["path"]
         apply_rigid_body(stage, path)
         bbox = mesh_world_bbox(stage, path)
-        # Try mesh volume first, fall back to bbox
-        mass_mesh = estimate_mass_from_mesh(stage, path, density=500.0)
-        mass_bbox = estimate_mass(bbox, mpu, density=500.0)
-        mass = mass_mesh if mass_mesh else mass_bbox
-        m_method = "mesh_vol" if mass_mesh else "bbox"
-        clamp = MASS_CLAMPS.get(info["joint"], (0.1, 50.0))
-        mass = max(clamp[0], min(clamp[1], mass))
+
+        if gemini_mass and len(movables) == 1:
+            # Single movable part: Gemini mass is for the whole object,
+            # give ~30% to the movable part (empirical for scissors/clamps)
+            mass = gemini_mass * 0.3
+            m_method = "gemini"
+        elif gemini_mass:
+            # Multiple movable parts: distribute proportionally (equal for now)
+            mass = gemini_mass / (len(movables) + 1)  # +1 for body
+            m_method = "gemini"
+        else:
+            mass_mesh = estimate_mass_from_mesh(stage, path, density=part_density)
+            mass_bbox = estimate_mass(bbox, mpu, density=part_density)
+            mass = mass_mesh if mass_mesh else mass_bbox
+            m_method = "mesh_vol" if mass_mesh else "bbox"
+
+        if m_method == "gemini":
+            # Trust Gemini mass — only apply a soft minimum (0.01kg)
+            mass = max(0.01, mass)
+        else:
+            clamp = MASS_CLAMPS.get(info["joint"], (0.1, 50.0))
+            mass = max(clamp[0], min(clamp[1], mass))
         apply_mass(stage, path, mass)
-        print(f"    {name}: dynamic, mass={mass:.2f}kg ({m_method})")
+        print(f"    {name}: dynamic, mass={mass:.2f}kg ({m_method}, density={part_density})")
 
     # --- C2: Collision Shapes ---
     print(f"\n  COLLIDERS:")
@@ -1590,8 +1617,18 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
 
 
 def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
-        classify_json=None, dynamic_body=False):
+        classify_json=None, dynamic_body=False, object_json=None):
     """Main entry point: audit, optionally classify + fix."""
+    # Load Gemini object understanding if provided
+    gemini_mass = None
+    gemini_density = None
+    if object_json and os.path.exists(object_json):
+        with open(object_json) as f:
+            obj_data = json.load(f)
+        gemini_mass = obj_data.get("estimated_mass_kg")
+        gemini_density = obj_data.get("material_density_kg_m3")
+        if gemini_mass:
+            print(f"  Gemini mass: {gemini_mass}kg, density: {gemini_density} kg/m³")
     print(f"\n{'='*60}")
     print(f"  make_simready (V8)")
     print(f"{'='*60}")
@@ -1643,7 +1680,8 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
         print(f"  Copied Textures/")
 
     out_stage = Usd.Stage.Open(output_usd)
-    apply_physics(out_stage, classification, output_usd, dynamic_body=dynamic_body)
+    apply_physics(out_stage, classification, output_usd, dynamic_body=dynamic_body,
+                  gemini_mass=gemini_mass, gemini_density=gemini_density)
 
     # Re-audit
     final_stage = Usd.Stage.Open(output_usd)
@@ -1677,6 +1715,8 @@ if __name__ == "__main__":
     ap.add_argument("--model", default=None, help="LLM model override")
     ap.add_argument("--classify-json", default=None,
                     help="Pre-made classification JSON (skips LLM call)")
+    ap.add_argument("--object-json", default=None,
+                    help="Object understanding JSON from Gemini (mass, material, density)")
     ap.add_argument("--dynamic", action="store_true",
                     help="Dynamic main body (e.g. trolley drag tests). Same *_physics.usd path. Not the fridge B–F recipe — omit for refrigerators.")
     args = ap.parse_args()
@@ -1688,4 +1728,5 @@ if __name__ == "__main__":
 
     run(input_path, fix=args.fix, provider=args.provider,
         model=args.model, output_dir=args.output_dir,
-        classify_json=args.classify_json, dynamic_body=args.dynamic)
+        classify_json=args.classify_json, dynamic_body=args.dynamic,
+        object_json=args.object_json)
