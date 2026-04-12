@@ -700,7 +700,7 @@ MASS_CLAMPS = {
 
 
 def estimate_mass(bbox, mpu=1.0, density=500.0):
-    """Estimate mass from bbox volume."""
+    """Estimate mass from bbox volume (fallback when mesh volume unavailable)."""
     if not bbox:
         return 1.0
     bmin, bmax = bbox
@@ -709,6 +709,58 @@ def estimate_mass(bbox, mpu=1.0, density=500.0):
     h = abs(bmax[2] - bmin[2]) * mpu
     vol = w * d * h
     return max(0.1, round(vol * density, 2))
+
+
+def estimate_mass_from_mesh(stage, xform_path, density=500.0):
+    """Estimate mass from actual mesh volume × density (more accurate than bbox).
+
+    Uses the divergence theorem on triangle meshes. Falls back to bbox if
+    mesh volume computation fails or returns zero.
+    """
+    prim = stage.GetPrimAtPath(xform_path)
+    if not prim:
+        return None
+    total_volume = 0.0
+    mpu = UsdGeom.GetStageMetersPerUnit(stage)
+    for mesh_prim in _get_all_descendant_meshes(prim):
+        pts_attr = mesh_prim.GetAttribute("points")
+        idx_attr = mesh_prim.GetAttribute("faceVertexIndices")
+        cnt_attr = mesh_prim.GetAttribute("faceVertexCounts")
+        if not all(a and a.HasValue() for a in [pts_attr, idx_attr, cnt_attr]):
+            continue
+        pts = pts_attr.Get()
+        indices = idx_attr.Get()
+        counts = cnt_attr.Get()
+        if not pts or not indices or not counts:
+            continue
+        # Scale vertices to meters
+        verts = [(float(p[0]) * mpu, float(p[1]) * mpu, float(p[2]) * mpu) for p in pts]
+        # Compute volume using divergence theorem
+        vol = 0.0
+        idx_offset = 0
+        for fc in counts:
+            if fc < 3:
+                idx_offset += fc
+                continue
+            # Triangulate: fan from first vertex
+            i0 = int(indices[idx_offset])
+            for t in range(1, fc - 1):
+                i1 = int(indices[idx_offset + t])
+                i2 = int(indices[idx_offset + t + 1])
+                v0, v1, v2 = verts[i0], verts[i1], verts[i2]
+                # Signed volume contribution: v0 · (v1 × v2) / 6
+                cross = (
+                    v1[1] * v2[2] - v1[2] * v2[1],
+                    v1[2] * v2[0] - v1[0] * v2[2],
+                    v1[0] * v2[1] - v1[1] * v2[0],
+                )
+                vol += v0[0] * cross[0] + v0[1] * cross[1] + v0[2] * cross[2]
+            idx_offset += fc
+        total_volume += abs(vol) / 6.0
+    if total_volume < 1e-10:
+        return None
+    mass = total_volume * density
+    return max(0.01, round(mass, 4))
 
 
 # --- Strip existing physics ---
@@ -1360,32 +1412,45 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False):
     # make body dynamic so the robot can pick it up. Large furniture stays kinematic.
     has_movables = len(movables) > 0
     if not has_movables and not dynamic_body:
-        body_bbox_check = mesh_world_bbox(stage, body_path)
-        if body_bbox_check:
-            est_mass = estimate_mass(body_bbox_check, mpu, density=500)
-            if est_mass < 3.0:
-                dynamic_body = True
-                print(f"    (small object {est_mass:.2f}kg, no joints — auto-dynamic for grasping)")
+        est_mass = estimate_mass_from_mesh(stage, body_path, density=500)
+        if not est_mass:
+            body_bbox_check = mesh_world_bbox(stage, body_path)
+            est_mass = estimate_mass(body_bbox_check, mpu, density=500) if body_bbox_check else 999
+        if est_mass < 3.0:
+            dynamic_body = True
+            print(f"    (small object {est_mass:.2f}kg, no joints — auto-dynamic for grasping)")
     body_kinematic = not dynamic_body
     apply_rigid_body(stage, body_path, kinematic=body_kinematic, dynamic_body=dynamic_body)
     body_bbox = mesh_world_bbox(stage, body_path)
     body_density = 80.0 if dynamic_body else 600.0
-    body_mass = estimate_mass(body_bbox, mpu, density=body_density)
+    # Try mesh volume for accurate mass, fall back to bbox
+    body_mass_mesh = estimate_mass_from_mesh(stage, body_path, density=body_density)
+    body_mass_bbox = estimate_mass(body_bbox, mpu, density=body_density)
+    if body_mass_mesh:
+        body_mass = body_mass_mesh
+        mass_method = "mesh_vol"
+    else:
+        body_mass = body_mass_bbox
+        mass_method = "bbox"
     if dynamic_body:
         body_mass = max(5.0, min(100.0, body_mass))
     apply_mass(stage, body_path, body_mass)
     body_mode = "dynamic" if dynamic_body else "kinematic"
-    print(f"    body: {body_mode}, mass={body_mass:.1f}kg")
+    print(f"    body: {body_mode}, mass={body_mass:.1f}kg ({mass_method})")
 
     for name, info in movables.items():
         path = info["path"]
         apply_rigid_body(stage, path)
         bbox = mesh_world_bbox(stage, path)
-        mass = estimate_mass(bbox, mpu, density=500.0)
+        # Try mesh volume first, fall back to bbox
+        mass_mesh = estimate_mass_from_mesh(stage, path, density=500.0)
+        mass_bbox = estimate_mass(bbox, mpu, density=500.0)
+        mass = mass_mesh if mass_mesh else mass_bbox
+        m_method = "mesh_vol" if mass_mesh else "bbox"
         clamp = MASS_CLAMPS.get(info["joint"], (0.1, 50.0))
         mass = max(clamp[0], min(clamp[1], mass))
         apply_mass(stage, path, mass)
-        print(f"    {name}: dynamic, mass={mass:.2f}kg")
+        print(f"    {name}: dynamic, mass={mass:.2f}kg ({m_method})")
 
     # --- C2: Collision Shapes ---
     print(f"\n  COLLIDERS:")
