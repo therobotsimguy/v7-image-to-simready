@@ -264,12 +264,15 @@ def run_test(asset_path, num_steps=500, scale=None):
             axis_vec = {"X": [1,0,0], "Y": [0,1,0], "Z": [0,0,1]}.get(axis, [0,1,0])
             direction = -1.0 if abs(lo) > abs(hi) else 1.0
 
+            n_bodies = rigid_obj.num_bodies
             if "Prismatic" in jtype:
-                force = torch.tensor([[axis_vec[0]*50*direction, axis_vec[1]*50*direction, axis_vec[2]*50*direction]], device="cpu")
-                torque = torch.zeros(1, 3, device="cpu")
+                force = torch.zeros(1, n_bodies, 3, device="cpu")
+                force[0, 0] = torch.tensor([axis_vec[0]*50*direction, axis_vec[1]*50*direction, axis_vec[2]*50*direction])
+                torque = torch.zeros(1, n_bodies, 3, device="cpu")
             else:
-                force = torch.zeros(1, 3, device="cpu")
-                torque = torch.tensor([[axis_vec[0]*20*direction, axis_vec[1]*20*direction, axis_vec[2]*20*direction]], device="cpu")
+                force = torch.zeros(1, n_bodies, 3, device="cpu")
+                torque = torch.zeros(1, n_bodies, 3, device="cpu")
+                torque[0, 0] = torch.tensor([axis_vec[0]*20*direction, axis_vec[1]*20*direction, axis_vec[2]*20*direction])
 
             # Apply force for 3 seconds
             rigid_obj.set_external_force_and_torque(force, torque)
@@ -279,7 +282,8 @@ def run_test(asset_path, num_steps=500, scale=None):
                 rigid_obj.update(sim.get_physics_dt())
 
             # Clear force
-            rigid_obj.set_external_force_and_torque(torch.zeros(1,3), torch.zeros(1,3))
+            rigid_obj.set_external_force_and_torque(
+                torch.zeros(1, n_bodies, 3), torch.zeros(1, n_bodies, 3))
 
             pos_final = rigid_obj.data.root_pos_w[0].cpu().numpy().copy()
 
