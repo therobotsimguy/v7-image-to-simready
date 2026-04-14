@@ -3405,68 +3405,14 @@ Output as JSON:
 
 
 
-    # ── Phase 8: Sidecar JSON (moved before Phase 6 so JSON exists for verification) ──
-    timer.start("Phase 8: Sidecar JSON")
-    print(f"\n  [Phase 8] Generating physics JSON...")
+    # ── Phase 6: Sidecar JSON ──
+    timer.start("Phase 6: Sidecar JSON")
+    print(f"\n  [Phase 6] Generating physics JSON...")
     stage = Usd.Stage.Open(v12_usd)
     json_path = os.path.join(output_dir, f"{asset_name}_physics.json")
     spec = generate_physics_json(stage, json_path)
     s = spec["summary"]
     print(f"    {s['rigid_bodies']} bodies, {s['joints']} joints, {s['total_mass_kg']}kg, SDF")
-
-    # ── Phase 6: Visual verification (uses pre-build renders + physics JSON, no re-render) ──
-    timer.start("Phase 6: Visual verification (JSON-based)")
-    try:
-        print(f"\n  [Phase 6] Visual verification (pre-build images + physics spec)...")
-        from google import genai
-        from google.genai import types as _types
-
-        _api_key = _load_gemini_key()
-        _model_name = _load_gemini_model()
-        if _api_key and rendered_views and os.path.exists(json_path):
-            _client = genai.Client(api_key=_api_key)
-            _contents = []
-            for img_path in rendered_views[:4]:  # Use first 4 cardinal views
-                with open(img_path, "rb") as f:
-                    _contents.append(_types.Part.from_text(text=f"[{Path(img_path).stem}]"))
-                    _contents.append(_types.Part.from_bytes(data=f.read(), mime_type="image/png"))
-
-            with open(json_path) as f:
-                _spec_text = f.read()
-
-            _contents.append(_types.Part.from_text(text=f"""
-You are verifying a SimReady physics asset. Compare the IMAGES (the original object)
-against the PHYSICS SPEC (what was built).
-
-PHYSICS SPEC:
-{_spec_text}
-
-Check:
-1. Does the number of rigid bodies match what you see? (doors, drawers, parts)
-2. Do the joint types make sense? (revolute for doors, prismatic for drawers)
-3. Is the total mass realistic for this object?
-4. Are there any visible parts that should be articulated but aren't in the spec?
-
-Output JSON:
-{{"overall": "PASS" or "FAIL", "issues": ["list of problems"], "confidence": 0.9}}
-"""))
-
-            _resp = _client.models.generate_content(
-                model=_model_name, contents=_contents, config={"temperature": 0.1})
-            _text = _resp.text.strip()
-            if _text.startswith("```"):
-                _text = _text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            _vv = json.loads(_text)
-            overall = _vv.get("overall", "?")
-            issues = _vv.get("issues", [])
-            print(f"    Result: {overall}")
-            if issues:
-                for iss in issues:
-                    print(f"    - {iss}")
-        else:
-            print(f"    Skipped — missing API key, renders, or JSON")
-    except Exception as e:
-        print(f"    Skipped — {e}")
 
     # ── Phase 7: URDF export ──
     timer.start("Phase 7: URDF export")
