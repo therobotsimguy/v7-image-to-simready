@@ -1771,7 +1771,7 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
 #!/usr/bin/env python3
 
 
-RENDER_SCRIPT = SCRIPT_DIR / "render_views.py"
+RENDER_SCRIPT = os.path.join(SCRIPT_DIR, "render_views.py")
 
 
 def _load_gemini_key():
@@ -1779,7 +1779,7 @@ def _load_gemini_key():
     key = os.environ.get("GOOGLE_API_KEY")
     if key:
         return key
-    keys_path = API_KEYS_PATH.resolve()
+    keys_path = Path(API_KEYS_PATH).resolve()
     if keys_path.exists():
         with open(keys_path) as f:
             keys = json.load(f)
@@ -1791,7 +1791,7 @@ def _load_gemini_key():
 
 def _load_gemini_model():
     """Load Gemini model from api_keys.json or default."""
-    keys_path = API_KEYS_PATH.resolve()
+    keys_path = Path(API_KEYS_PATH).resolve()
     if keys_path.exists():
         with open(keys_path) as f:
             keys = json.load(f)
@@ -1803,7 +1803,7 @@ def _load_gemini_model():
 
 def render_views(usd_path: str, output_dir: str, verbose: bool = True) -> list:
     """Render 4 views of USD asset using Blender headless. Returns list of PNG paths."""
-    if not RENDER_SCRIPT.exists():
+    if not os.path.exists(RENDER_SCRIPT):
         raise FileNotFoundError(f"render_views.py not found at {RENDER_SCRIPT}")
 
     cmd = [
@@ -2008,7 +2008,7 @@ def _load_gemini():
     api_key = os.environ.get("GOOGLE_API_KEY")
     model_name = "gemini-2.5-pro"
 
-    keys_path = API_KEYS_PATH.resolve()
+    keys_path = Path(API_KEYS_PATH).resolve()
     if keys_path.exists():
         with open(keys_path) as f:
             keys = json.load(f)
@@ -2186,103 +2186,10 @@ def density_for_material(material_name):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# COMPONENT: render_views
+# COMPONENT: render_views (runs via subprocess in Blender — not merged)
+# render_views.py is a Blender script called via: blender --python render_views.py
+# It lives as a separate file next to v12_pipeline.py
 # ═══════════════════════════════════════════════════════════════════
-
-#!/usr/bin/env python3
-
-import bpy
-
-# Parse args after "--"
-argv = sys.argv[sys.argv.index("--") + 1:]
-usd_path = argv[0]
-out_dir = argv[1] if len(argv) > 1 else "/tmp/v9_views"
-os.makedirs(out_dir, exist_ok=True)
-
-# Clear default scene
-bpy.ops.wm.read_factory_settings(use_empty=True)
-
-# Import USD
-bpy.ops.wm.usd_import(filepath=usd_path)
-
-# Compute scene bounds
-objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
-if not objects:
-    print("ERROR: No mesh objects found in USD")
-    sys.exit(1)
-
-# Use Blender's built-in bounding box
-min_co = mathutils.Vector((float('inf'),) * 3)
-max_co = mathutils.Vector((float('-inf'),) * 3)
-for obj in objects:
-    for corner in obj.bound_box:
-        world_co = obj.matrix_world @ mathutils.Vector(corner)
-        for i in range(3):
-            min_co[i] = min(min_co[i], world_co[i])
-            max_co[i] = max(max_co[i], world_co[i])
-
-center = (min_co + max_co) / 2
-size = max(max_co[i] - min_co[i] for i in range(3))
-dist = size * 2.2  # Camera distance
-
-# Add sun light
-bpy.ops.object.light_add(type='SUN', location=(5, 5, 10))
-sun = bpy.context.object
-sun.data.energy = 3.0
-
-# Add fill light from below
-bpy.ops.object.light_add(type='AREA', location=(0, 0, -5))
-fill = bpy.context.object
-fill.data.energy = 50.0
-fill.data.size = 10.0
-
-# Render settings
-bpy.context.scene.render.engine = 'BLENDER_EEVEE_NEXT'
-bpy.context.scene.render.resolution_x = 1024
-bpy.context.scene.render.resolution_y = 1024
-bpy.context.scene.render.image_settings.file_format = 'PNG'
-bpy.context.scene.render.film_transparent = True
-
-# Set world background
-world = bpy.data.worlds.new("World")
-bpy.context.scene.world = world
-world.use_nodes = True
-bg = world.node_tree.nodes["Background"]
-bg.inputs[0].default_value = (0.15, 0.15, 0.18, 1.0)  # Dark gray
-
-# 4 camera views: front, back, left, right
-# Z-up coordinate system (USD convention)
-views = {
-    "front": (center.x, center.y - dist, center.z + size * 0.2),
-    "back":  (center.x, center.y + dist, center.z + size * 0.2),
-    "left":  (center.x - dist, center.y, center.z + size * 0.2),
-    "right": (center.x + dist, center.y, center.z + size * 0.2),
-}
-
-rendered = []
-for name, loc in views.items():
-    bpy.ops.object.camera_add(location=loc)
-    cam = bpy.context.object
-    cam.data.lens = 50
-    cam.data.clip_end = dist * 5
-
-    # Point camera at center
-    direction = mathutils.Vector(center) - mathutils.Vector(loc)
-    rot_quat = direction.to_track_quat('-Z', 'Y')
-    cam.rotation_euler = rot_quat.to_euler()
-
-    bpy.context.scene.camera = cam
-    filepath = os.path.join(out_dir, f"{name}.png")
-    bpy.context.scene.render.filepath = filepath
-    bpy.ops.render.render(write_still=True)
-    rendered.append(filepath)
-
-    # Clean up camera
-    bpy.data.objects.remove(cam)
-
-print(f"RENDERED: {len(rendered)} views to {out_dir}")
-for r in rendered:
-    print(f"  {r}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2903,7 +2810,7 @@ def main():
 
 
 
-RENDER_SCRIPT = SCRIPT_DIR / "render_views.py"
+RENDER_SCRIPT = os.path.join(SCRIPT_DIR, "render_views.py")
 
 
 def _set_joint_positions(stage, q_fraction):
@@ -3003,7 +2910,7 @@ def _ask_gemini(image_paths, asset_description, verbose=True):
     # Load API key
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        keys_path = API_KEYS_PATH.resolve()
+        keys_path = Path(API_KEYS_PATH).resolve()
         if keys_path.exists():
             with open(keys_path) as f:
                 keys = json.load(f)
@@ -3016,7 +2923,7 @@ def _ask_gemini(image_paths, asset_description, verbose=True):
 
     # Load model
     model_name = "gemini-2.5-pro"
-    keys_path = API_KEYS_PATH.resolve()
+    keys_path = Path(API_KEYS_PATH).resolve()
     if keys_path.exists():
         with open(keys_path) as f:
             keys = json.load(f)
@@ -3283,6 +3190,44 @@ def generate_physics_json(stage, output_path):
 def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
             object_json=None, provider="anthropic", model=None):
     """V12 complete pipeline: raw USD → full SimReady output."""
+    import time as _time
+
+    class PhaseTimer:
+        """Tracks wall clock time per pipeline phase."""
+        def __init__(self):
+            self.phases = []
+            self.pipeline_start = _time.time()
+            self._phase_start = None
+            self._phase_name = None
+
+        def start(self, name):
+            if self._phase_name:
+                self.stop()
+            self._phase_name = name
+            self._phase_start = _time.time()
+
+        def stop(self):
+            if self._phase_name:
+                elapsed = _time.time() - self._phase_start
+                self.phases.append((self._phase_name, elapsed))
+                self._phase_name = None
+
+        def report(self):
+            self.stop()
+            total = _time.time() - self.pipeline_start
+            print(f"\n  {'─' * 58}")
+            print(f"  TIMING REPORT")
+            print(f"  {'─' * 58}")
+            for name, elapsed in self.phases:
+                bar = "█" * int(elapsed / total * 30)
+                pct = elapsed / total * 100
+                print(f"    {name:40s} {elapsed:6.1f}s  {pct:5.1f}%  {bar}")
+            print(f"  {'─' * 58}")
+            print(f"    {'TOTAL':40s} {total:6.1f}s")
+            return {"phases": {n: round(e, 2) for n, e in self.phases}, "total_seconds": round(total, 2)}
+
+    timer = PhaseTimer()
+
     input_path = os.path.abspath(input_usd)
     basename = os.path.splitext(os.path.basename(input_path))[0]
     asset_name = basename
@@ -3297,36 +3242,126 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
     print(f"  Input:  {input_path}")
     print(f"  Output: {output_dir}/")
 
-    # ── Phase 1b: Gemini vision ──
+    # ── Phase 1a: Read hierarchy ──
+    timer.start("Phase 1a: Read USD hierarchy")
+    stage_tmp = Usd.Stage.Open(str(input_path))
+    hier = read_hierarchy(stage_tmp)
+    hier_text = hierarchy_to_text(hier)
+
+    # ── Phase 1b: Render 8 views (single Blender session) ──
+    timer.start("Phase 1b: Blender render (8 views)")
+    rendered_views = []
+    render_dir = os.path.join(tempfile.gettempdir(), "v12_renders")
     try:
-        print(f"\n  [Phase 1b] Gemini visual analysis...")
-        stage_tmp = Usd.Stage.Open(str(input_path))
-        hier = read_hierarchy(stage_tmp)
-        hier_text = hierarchy_to_text(hier)
-        vision_result = analyze_asset_visually(str(input_path), hierarchy_text=hier_text, verbose=True)
-        if "error" not in vision_result:
-            n_parts = len(vision_result.get("movable_parts", []))
-            print(f"    Gemini found {n_parts} movable parts")
+        print(f"\n  [Phase 1b] Rendering 8 views (Blender headless)...")
+        render_script = os.path.join(SCRIPT_DIR, "render_views.py")
+        if os.path.exists(render_script):
+            cmd = ["blender", "--background", "--python", render_script,
+                   "--", str(input_path), render_dir]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0:
+                for name in ("front", "back", "left", "right", "top", "bottom", "corner_fl", "corner_fr"):
+                    p = os.path.join(render_dir, f"{name}.png")
+                    if os.path.exists(p):
+                        rendered_views.append(p)
+                print(f"    Rendered {len(rendered_views)} views")
+            else:
+                print(f"    Blender failed: {result.stderr[-200:]}")
+        else:
+            print(f"    Skipped — render_views.py not found")
     except Exception as e:
         print(f"    Skipped — {e}")
 
-    # ── Phase 1c: Object understanding ──
+    # ── Phase 1c: Gemini unified analysis (vision + object understanding in 1 call) ──
+    timer.start("Phase 1c: Gemini analysis (1 combined call)")
     try:
-        print(f"\n  [Phase 1c] Gemini object understanding...")
-        obj_data = understand_object(str(input_path), verbose=True)
-        if "error" not in obj_data:
-            gm = obj_data.get("estimated_mass_kg")
-            if gm:
-                print(f"    Mass: {gm}kg")
-                obj_json_path = os.path.join(tempfile.gettempdir(), "v12_object.json")
-                with open(obj_json_path, "w") as f:
-                    json.dump(obj_data, f, indent=2)
-                if not object_json:
-                    object_json = obj_json_path
+        print(f"\n  [Phase 1c] Gemini combined analysis (vision + mass + material)...")
+        from google import genai
+        from google.genai import types
+
+        api_key = _load_gemini_key()
+        model_name = _load_gemini_model()
+        if api_key and rendered_views:
+            client = genai.Client(api_key=api_key)
+            contents = []
+            for img_path in rendered_views:
+                with open(img_path, "rb") as f:
+                    img_data = f.read()
+                view_name = Path(img_path).stem
+                contents.append(types.Part.from_text(text=f"[{view_name} view]"))
+                contents.append(types.Part.from_bytes(data=img_data, mime_type="image/png"))
+
+            contents.append(types.Part.from_text(text=f"""
+Analyze this object for robotic simulation (SimReady). You have 8 views showing all sides.
+
+USD HIERARCHY:
+{hier_text}
+
+Answer ALL of the following in ONE JSON response:
+
+1. MOVABLE PARTS: List every part that can move independently.
+   For each: name (match USD Xform names), type (door/drawer/wheel/slider/lever),
+   axis (X/Y/Z), hinge_side (left/right/null), handle_visible (true/false)
+
+2. OBJECT IDENTITY: What is this object specifically?
+   object_name, object_type (furniture/tool/instrument/container)
+
+3. MATERIAL & MASS: What is it made of? How much does it weigh?
+   material (specific: "stainless_steel" not "metal"),
+   material_density_kg_m3, estimated_mass_kg
+
+4. ARTICULATION: For each movable part:
+   behavior (door/drawer/slider/wheel), joint_type (revolute/prismatic/continuous),
+   range_description ("0-120°", "0-15cm"), range_meters, limits_bidirectional (true/false)
+
+5. ISSUES: Flag anything suspicious — parts that look movable but aren't in hierarchy,
+   structural parts that might be misclassified, scale issues
+
+Output as JSON:
+{{
+  "movable_parts": [{{"name": "...", "type": "door", "axis": "Z", "hinge_side": "left", "handle_visible": true}}],
+  "object_name": "...",
+  "object_type": "...",
+  "material": "...",
+  "material_density_kg_m3": 7800,
+  "estimated_mass_kg": 0.15,
+  "is_articulated": true,
+  "articulated_parts": [{{"name": "...", "behavior": "slider", "joint_type": "prismatic", "axis": "Y", "range_meters": 0.15, "limits_bidirectional": true}}],
+  "issues": ["..."],
+  "confidence": 0.95
+}}
+"""))
+
+            response = client.models.generate_content(
+                model=model_name, contents=contents, config={"temperature": 0.1})
+            text = response.text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+            gemini_result = json.loads(text)
+            n_parts = len(gemini_result.get("movable_parts", []))
+            gm = gemini_result.get("estimated_mass_kg")
+            print(f"    Object: {gemini_result.get('object_name', '?')}")
+            print(f"    Movable parts: {n_parts}")
+            print(f"    Mass: {gm}kg, Material: {gemini_result.get('material', '?')}")
+
+            # Save object data for physics build
+            obj_json_path = os.path.join(tempfile.gettempdir(), "v12_object.json")
+            with open(obj_json_path, "w") as f:
+                json.dump(gemini_result, f, indent=2)
+            if not object_json:
+                object_json = obj_json_path
+        elif not api_key:
+            print(f"    Skipped — no Gemini API key")
+        elif not rendered_views:
+            print(f"    Skipped — no rendered views")
+    except json.JSONDecodeError as e:
+        print(f"    Gemini returned invalid JSON — {e}")
     except Exception as e:
         print(f"    Skipped — {e}")
 
     # ── Phase 2: Build physics ──
+    timer.start("Phase 2: Classification + physics")
     print(f"\n  [Phase 2] Building physics...")
     physics_usd = run(input_path, fix=True, provider=provider, model=model,
                       output_dir=temp_out, classify_json=classify_json,
@@ -3338,6 +3373,7 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
         print("  ERROR: No _physics.usd produced"); return None
 
     # ── Phase 3: SDF ──
+    timer.start("Phase 3: SDF collision upgrade")
     os.makedirs(output_dir, exist_ok=True)
     v12_usd = os.path.join(output_dir, f"{basename}_physics.usd")
     shutil.copy2(physics_usd, v12_usd)
@@ -3352,11 +3388,13 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
     print(f"    {n_sdf} colliders → SDF")
 
     # ── Phase 4: Articulation variant ──
+    timer.start("Phase 4: Articulation variant")
     print(f"\n  [Phase 4] Creating articulation variant...")
     artic_usd = os.path.join(output_dir, f"{asset_name}_articulation.usd")
     create_articulation_variant(v12_usd, artic_usd)
 
     # ── Phase 5: MuJoCo validation ──
+    timer.start("Phase 5: MuJoCo validation")
     try:
         print(f"\n  [Phase 5] MuJoCo behavioral validation...")
         bv = validate(str(v12_usd), verbose=True)
@@ -3365,23 +3403,32 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
     except Exception as e:
         print(f"    Skipped — {e}")
 
-    # ── Phase 6: Visual verification ──
+    # ── Phase 5b: PhysX headless testing (via Isaac Sim subprocess) ──
+    timer.start("Phase 5b: PhysX testing (Isaac Sim)")
     try:
-        print(f"\n  [Phase 6] Post-build visual verification...")
-        vv = verify_post_build(str(v12_usd), verbose=True)
-        if vv and vv.get("overall") == "FAIL":
-            print(f"    WARNING: Visual verification FAILED")
+        print(f"\n  [Phase 5b] PhysX headless testing...")
+        test_script = os.path.join(SCRIPT_DIR, "test_physics.py")
+        isaaclab_path = os.environ.get("ISAACLAB_PATH", os.path.join(SCRIPT_DIR, "..", "..", ".."))
+        isaaclab_sh = os.path.join(isaaclab_path, "isaaclab.sh")
+        if os.path.exists(test_script) and os.path.exists(isaaclab_sh):
+            phys_cmd = [isaaclab_sh, "-p", test_script,
+                        "--asset", str(v12_usd), "--headless", "--device", "cpu"]
+            phys_result = subprocess.run(phys_cmd, capture_output=True, text=True, timeout=300)
+            # Print key results
+            for line in phys_result.stdout.splitlines():
+                if any(k in line for k in ["[+]", "[?]", "[X]", "PHYSX TEST"]):
+                    print(f"    {line.strip()}")
+            if phys_result.returncode != 0:
+                print(f"    WARNING: PhysX test returned exit code {phys_result.returncode}")
+        else:
+            print(f"    Skipped — test_physics.py or isaaclab.sh not found")
+    except subprocess.TimeoutExpired:
+        print(f"    Skipped — timed out after 300s")
     except Exception as e:
         print(f"    Skipped — {e}")
 
-    # ── Phase 7: URDF export ──
-    try:
-        print(f"\n  [Phase 7] URDF export...")
-        urdf_path = export_urdf(str(v12_usd), output_dir=output_dir, verbose=True)
-    except Exception as e:
-        print(f"    Skipped — {e}")
-
-    # ── Phase 8: Sidecar JSON ──
+    # ── Phase 8: Sidecar JSON (moved before Phase 6 so JSON exists for verification) ──
+    timer.start("Phase 8: Sidecar JSON")
     print(f"\n  [Phase 8] Generating physics JSON...")
     stage = Usd.Stage.Open(v12_usd)
     json_path = os.path.join(output_dir, f"{asset_name}_physics.json")
@@ -3389,12 +3436,83 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
     s = spec["summary"]
     print(f"    {s['rigid_bodies']} bodies, {s['joints']} joints, {s['total_mass_kg']}kg, SDF")
 
+    # ── Phase 6: Visual verification (uses pre-build renders + physics JSON, no re-render) ──
+    timer.start("Phase 6: Visual verification (JSON-based)")
+    try:
+        print(f"\n  [Phase 6] Visual verification (pre-build images + physics spec)...")
+        from google import genai
+        from google.genai import types as _types
+
+        _api_key = _load_gemini_key()
+        _model_name = _load_gemini_model()
+        if _api_key and rendered_views and os.path.exists(json_path):
+            _client = genai.Client(api_key=_api_key)
+            _contents = []
+            for img_path in rendered_views[:4]:  # Use first 4 cardinal views
+                with open(img_path, "rb") as f:
+                    _contents.append(_types.Part.from_text(text=f"[{Path(img_path).stem}]"))
+                    _contents.append(_types.Part.from_bytes(data=f.read(), mime_type="image/png"))
+
+            with open(json_path) as f:
+                _spec_text = f.read()
+
+            _contents.append(_types.Part.from_text(text=f"""
+You are verifying a SimReady physics asset. Compare the IMAGES (the original object)
+against the PHYSICS SPEC (what was built).
+
+PHYSICS SPEC:
+{_spec_text}
+
+Check:
+1. Does the number of rigid bodies match what you see? (doors, drawers, parts)
+2. Do the joint types make sense? (revolute for doors, prismatic for drawers)
+3. Is the total mass realistic for this object?
+4. Are there any visible parts that should be articulated but aren't in the spec?
+
+Output JSON:
+{{"overall": "PASS" or "FAIL", "issues": ["list of problems"], "confidence": 0.9}}
+"""))
+
+            _resp = _client.models.generate_content(
+                model=_model_name, contents=_contents, config={"temperature": 0.1})
+            _text = _resp.text.strip()
+            if _text.startswith("```"):
+                _text = _text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            _vv = json.loads(_text)
+            overall = _vv.get("overall", "?")
+            issues = _vv.get("issues", [])
+            print(f"    Result: {overall}")
+            if issues:
+                for iss in issues:
+                    print(f"    - {iss}")
+        else:
+            print(f"    Skipped — missing API key, renders, or JSON")
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 7: URDF export ──
+    timer.start("Phase 7: URDF export")
+    try:
+        print(f"\n  [Phase 7] URDF export...")
+        urdf_path = export_urdf(str(v12_usd), output_dir=output_dir, verbose=True)
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Timing report ──
+    timing = timer.report()
+
+    # Save timing to JSON alongside the asset
+    timing_path = os.path.join(output_dir, f"{asset_name}_timing.json")
+    with open(timing_path, "w") as f:
+        json.dump(timing, f, indent=2)
+
     print(f"\n{'=' * 60}")
     print(f"  V12 COMPLETE")
     print(f"{'=' * 60}")
     print(f"  {v12_usd}")
     print(f"  {artic_usd}")
     print(f"  {json_path}")
+    print(f"  {timing_path}")
     print(f"\n  Test:")
     print(f"    ISAACLAB_PATH=/home/msi/IsaacLab ./isaaclab.sh -p scripts/environments/teleoperation/teleop_se3_agent_cinematic.py \\")
     print(f"      --asset {os.path.abspath(v12_usd)} --device cpu")
