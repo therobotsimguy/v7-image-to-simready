@@ -3387,11 +3387,21 @@ Output as JSON:
     stage.GetRootLayer().Save()
     print(f"    {n_sdf} colliders → SDF")
 
-    # ── Phase 4: Articulation variant ──
-    timer.start("Phase 4: Articulation variant")
-    print(f"\n  [Phase 4] Creating articulation variant...")
-    artic_usd = os.path.join(output_dir, f"{asset_name}_articulation.usd")
-    create_articulation_variant(v12_usd, artic_usd)
+    # ── Phase 4: Add ArticulationRootAPI (required for Newton + drive targets) ──
+    timer.start("Phase 4: ArticulationRootAPI")
+    print(f"\n  [Phase 4] Adding ArticulationRootAPI...")
+    stage = Usd.Stage.Open(v12_usd)
+    dp = stage.GetDefaultPrim()
+    dp_spec = stage.GetRootLayer().GetPrimAtPath(dp.GetPath())
+    schemas = dp_spec.GetInfo("apiSchemas")
+    items = list(schemas.prependedItems) if schemas and hasattr(schemas, "prependedItems") else []
+    if "PhysicsArticulationRootAPI" not in items:
+        items.append("PhysicsArticulationRootAPI")
+        new_list = Sdf.TokenListOp()
+        new_list.prependedItems = items
+        dp_spec.SetInfo("apiSchemas", new_list)
+    stage.GetRootLayer().Save()
+    print(f"    ArticulationRootAPI on '{dp.GetName()}' (Newton + drive targets + shift+drag all work)")
 
     # ── Phase 5: MuJoCo validation ──
     timer.start("Phase 5: MuJoCo validation")
@@ -3434,7 +3444,7 @@ Output as JSON:
     print(f"  V12 COMPLETE")
     print(f"{'=' * 60}")
     print(f"  {v12_usd}")
-    print(f"  {artic_usd}")
+    print(f"    → SDF collision + ArticulationRootAPI (shift+drag + drive targets + Newton)")
     print(f"  {json_path}")
     print(f"  {timing_path}")
     print(f"\n  Test:")
