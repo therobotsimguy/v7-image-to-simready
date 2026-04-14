@@ -143,12 +143,31 @@ def main() -> None:
     # physics engine picks it up before simulation starts. The USD has no internal
     # physicsScene or simulationOwner (avoids reference scope issues). Root body
     # is kinematic (stays at spawn position, no world anchor needed).
-    from pxr import Usd as _Usd, UsdGeom as _UsdGeom
+    from pxr import Usd as _Usd, UsdGeom as _UsdGeom, Gf as _Gf
     _tmp_stage = _Usd.Stage.Open(asset_path)
     _mpu = _UsdGeom.GetStageMetersPerUnit(_tmp_stage)
     _s = _mpu if abs(_mpu - 1.0) > 0.01 else 1.0
+
     if args_cli.asset_scale:
+        # Manual override
         _s *= args_cli.asset_scale
+    else:
+        # First principle: scale asset so largest dimension ≈ 1m (Franka workspace).
+        # PhysX solver precision + robot reach both work best at ~1m scale.
+        _cache = _UsdGeom.BBoxCache(_Usd.TimeCode.Default(), ["default"])
+        _dp = _tmp_stage.GetDefaultPrim()
+        _bbox = _cache.ComputeWorldBound(_dp)
+        _rng = _bbox.ComputeAlignedRange()
+        _sz = _rng.GetMax() - _rng.GetMin()
+        _max_dim = max(_sz[0], _sz[1], _sz[2]) * _s  # in meters after mpu
+        _TARGET_SIZE = 1.0  # meters — Franka-scale
+        if _max_dim > 0.001 and _max_dim < _TARGET_SIZE:
+            _auto_scale = _TARGET_SIZE / _max_dim
+            _s *= _auto_scale
+            print(f"[AutoScale] Asset is {_max_dim:.3f}m — scaling {_auto_scale:.1f}x to ~{_TARGET_SIZE}m (Franka workspace)")
+        elif _max_dim >= _TARGET_SIZE:
+            print(f"[AutoScale] Asset is {_max_dim:.2f}m — no scaling needed")
+
     _scale = (_s, _s, _s) if abs(_s - 1.0) > 0.001 else None
     del _tmp_stage
 
@@ -191,7 +210,7 @@ def main() -> None:
             finger_count = 0
             for prim in stage.Traverse():
                 prim_path = str(prim.GetPath())
-                if prim_path.startswith(robot_prim_path) or prim_path.startswith("/World/envs/env_0"):
+                if prim_path.startswith(robot_prim_path):
                     if prim.HasAPI(_UsdPhysics.CollisionAPI):
                         prim.CreateAttribute("physxCollision:contactOffset", _Sdf.ValueTypeNames.Float).Set(0.00005)
                         prim.CreateAttribute("physxCollision:restOffset", _Sdf.ValueTypeNames.Float).Set(0.0)

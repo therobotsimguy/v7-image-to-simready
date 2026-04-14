@@ -564,6 +564,19 @@ def classify_with_anthropic(hierarchy_text, model=None):
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            # Handle models that return prose before/after JSON
+            if not text.startswith("{"):
+                # Extract JSON block from prose (```json...``` or raw {})
+                import re
+                json_match = re.search(r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL)
+                if json_match:
+                    text = json_match.group(1).strip()
+                else:
+                    # Find first { ... last }
+                    brace_start = text.find("{")
+                    brace_end = text.rfind("}")
+                    if brace_start >= 0 and brace_end > brace_start:
+                        text = text[brace_start:brace_end + 1]
             result = json.loads(text)
             if "body" in result and "parts" in result:
                 return result
@@ -1078,10 +1091,10 @@ def make_revolute_joint(stage, joint_path, body0, body1, local_pos0, local_pos1,
     joint.CreateBody1Rel().SetTargets([body1])
     joint.CreateLocalPos0Attr(local_pos0)
     joint.CreateLocalPos1Attr(local_pos1)
+    # Disable collision between connected bodies — SDF exact mesh blocks rotation at rest
+    joint.CreateCollisionEnabledAttr(False)
     drive = UsdPhysics.DriveAPI.Apply(stage.GetPrimAtPath(joint_path), "angular")
-    # Low damping so Isaac viewport shift+drag can rotate hinged parts (skill: ~2 Nm·s/rad for doors)
     drive.CreateDampingAttr(2.0)
-    # Always stiffness 0: a positional spring to 0° (old dynamic_body branch) locks doors closed and blocks drag/gripper.
     drive.CreateStiffnessAttr(0.0)
 
 
@@ -1095,6 +1108,8 @@ def make_prismatic_joint(stage, joint_path, body0, body1, local_pos0, local_pos1
     joint.CreateBody1Rel().SetTargets([body1])
     joint.CreateLocalPos0Attr(local_pos0)
     joint.CreateLocalPos1Attr(local_pos1)
+    # Disable collision between connected bodies — SDF exact mesh blocks sliding
+    joint.CreateCollisionEnabledAttr(False)
     drive = UsdPhysics.DriveAPI.Apply(stage.GetPrimAtPath(joint_path), "linear")
     drive.CreateDampingAttr(5.0)
     drive.CreateStiffnessAttr(0.0)
@@ -1110,6 +1125,8 @@ def make_continuous_joint(stage, joint_path, body0, body1, local_pos0, local_pos
     joint.CreateLocalPos1Attr(local_pos1)
     joint.CreateLowerLimitAttr(-9999.0)
     joint.CreateUpperLimitAttr(9999.0)
+    # Disable collision between connected bodies — SDF exact mesh blocks rotation
+    joint.CreateCollisionEnabledAttr(False)
     drive = UsdPhysics.DriveAPI.Apply(stage.GetPrimAtPath(joint_path), "angular")
     drive.CreateDampingAttr(2.0)
     drive.CreateStiffnessAttr(0.0)
@@ -1332,7 +1349,7 @@ def normalize_to_meters(stage):
 
 
 def apply_physics(stage, classification, output_usd, dynamic_body=False,
-                  gemini_mass=None, gemini_density=None):
+                  gemini_mass=None, gemini_density=None, gemini_articulation=None):
     """Phase 3: Apply all missing physics based on classification."""
     default_prim = stage.GetDefaultPrim()
     dp_path = default_prim.GetPath()
@@ -1632,13 +1649,23 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False,
                     if span_ratio > 0.9:
                         is_slider = True
 
-            if is_slider:
-                # Bidirectional: GENEROUS limits both ways. Don't try to compute
-                # exact range — the physical geometry (collision) is the real
-                # constraint. Tight limits only cut off useful range. (F37)
-                lower_m = -depth * 2.0
-                upper_m = depth * 0.6
-                print(f"    (slider detected — generous bidirectional [{lower_m:.3f}, {upper_m:.3f}])")
+            if is_slider and bbox and body_bbox:
+                # First principle: max travel per direction = geometry limit.
+                # Part can travel until its edge just reaches the body edge.
+                # Asymmetric when part is offset (one side has more room).
+                body_lo = body_bbox[0][axis_idx]
+                body_hi = body_bbox[1][axis_idx]
+                part_lo = bbox[0][axis_idx]
+                part_hi = bbox[1][axis_idx]
+                # Max positive: part slides +d until part_lo+d reaches body_hi
+                upper_m = body_hi - part_lo    # e.g. 0.119-(-0.143) = 0.262
+                # Max negative: part slides -d until part_hi+d reaches body_lo
+                lower_m = body_lo - part_hi    # e.g. -0.119-0.095 = -0.214
+                print(f"    (slider — geometry limits [{lower_m:.3f}, {upper_m:.3f}])")
+            elif is_slider:
+                lower_m = -travel
+                upper_m = travel
+                print(f"    (slider — fallback [{lower_m:.3f}, {upper_m:.3f}])")
             elif bbox and body_bbox:
                 # Drawer: one direction, face toward body exterior
                 body_center_ax = (body_bbox[0][axis_idx] + body_bbox[1][axis_idx]) / 2
@@ -1649,6 +1676,27 @@ def apply_physics(stage, classification, output_usd, dynamic_body=False,
                     lower_m, upper_m = 0.0, travel
             else:
                 lower_m, upper_m = 0.0, travel
+
+            # ── Geometry clamp (drawers only): part must not fully exit body ──
+            # Sliders (caliper) already use overlap as limit — symmetric, correct.
+            # Drawers need clamping: 20% of part length must stay inside body.
+            if not is_slider and bbox and body_bbox:
+                body_lo = body_bbox[0][axis_idx]
+                body_hi = body_bbox[1][axis_idx]
+                part_lo = bbox[0][axis_idx]
+                part_hi = bbox[1][axis_idx]
+                part_len = part_hi - part_lo
+                min_retain = 0.20 * part_len
+
+                geo_upper = body_hi - part_lo - min_retain
+                geo_lower = body_lo - part_hi + min_retain
+
+                old_lower, old_upper = lower_m, upper_m
+                lower_m = max(lower_m, geo_lower)
+                upper_m = min(upper_m, geo_upper)
+                if lower_m != old_lower or upper_m != old_upper:
+                    print(f"    (geometry clamped 20%: [{old_lower:.3f},{old_upper:.3f}] → [{lower_m:.3f},{upper_m:.3f}])")
+
             make_prismatic_joint(stage, joint_path, body_path, path,
                                  lp0_f, lp1_f, axis=axis,
                                  lower_m=lower_m, upper_m=upper_m)
@@ -1680,6 +1728,7 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
     # Load Gemini object understanding if provided
     gemini_mass = None
     gemini_density = None
+    gemini_articulation = {}  # part_name → {range_meters, limits_bidirectional}
     if object_json and os.path.exists(object_json):
         with open(object_json) as f:
             obj_data = json.load(f)
@@ -1687,6 +1736,17 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
         gemini_density = obj_data.get("material_density_kg_m3")
         if gemini_mass:
             print(f"  Gemini mass: {gemini_mass}kg, density: {gemini_density} kg/m³")
+        # Extract articulation ranges from Gemini (range_meters, limits_bidirectional)
+        for ap in obj_data.get("articulated_parts", []):
+            pname = ap.get("name", "")
+            rm = ap.get("range_meters")
+            if pname and rm and rm > 0:
+                gemini_articulation[pname] = {
+                    "range_meters": rm,
+                    "bidirectional": ap.get("limits_bidirectional", False),
+                }
+        if gemini_articulation:
+            print(f"  Gemini articulation: {len(gemini_articulation)} parts with range data")
     print(f"\n{'='*60}")
     print(f"  make_simready (V8)")
     print(f"{'='*60}")
@@ -1739,7 +1799,8 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
 
     out_stage = Usd.Stage.Open(output_usd)
     apply_physics(out_stage, classification, output_usd, dynamic_body=dynamic_body,
-                  gemini_mass=gemini_mass, gemini_density=gemini_density)
+                  gemini_mass=gemini_mass, gemini_density=gemini_density,
+                  gemini_articulation=gemini_articulation)
 
     # Re-audit
     final_stage = Usd.Stage.Open(output_usd)
@@ -3089,21 +3150,39 @@ def verify_post_build(physics_usd_path, verbose=True):
 # ═══════════════════════════════════════════════════════════════════
 
 def apply_sdf_collision(stage):
-    """Switch all collision shapes to SDF (exact mesh surface)."""
-    n = 0
+    """Upgrade collision to SDF where possible, keep convexHull for non-manifold meshes.
+
+    SDF requires watertight/manifold meshes. Thin decorative meshes (text, decals,
+    engravings) are typically non-manifold and will cause PhysX warnings on dynamic
+    bodies. These stay as convexHull.
+    """
+    # Keywords that indicate non-manifold decorative meshes
+    _DECORATIVE_KW = ("text", "decal", "label", "engrav", "print", "logo", "stamp")
+
+    n_sdf = 0
+    n_hull = 0
     for prim in stage.Traverse():
-        if prim.HasAPI(UsdPhysics.CollisionAPI):
-            # Apply MeshCollisionAPI
-            UsdPhysics.MeshCollisionAPI.Apply(prim)
-            # Force-set approximation to sdf (overrides any existing value)
+        if not prim.HasAPI(UsdPhysics.CollisionAPI):
+            continue
+        UsdPhysics.MeshCollisionAPI.Apply(prim)
+        name_lower = prim.GetName().lower()
+        is_decorative = any(kw in name_lower for kw in _DECORATIVE_KW)
+
+        if is_decorative:
+            # Non-manifold risk — safe convexHull
+            prim.CreateAttribute("physics:approximation",
+                                 Sdf.ValueTypeNames.Token).Set("convexHull")
+            n_hull += 1
+        else:
+            # Main geometry — SDF (exact mesh surface)
             prim.CreateAttribute("physics:approximation",
                                  Sdf.ValueTypeNames.Token).Set("sdf")
             # Remove convexDecomposition params
             for prop_name in [p.GetName() for p in prim.GetAuthoredProperties()]:
                 if "physxConvex" in prop_name:
                     prim.RemoveProperty(prop_name)
-            n += 1
-    return n
+            n_sdf += 1
+    return n_sdf, n_hull
 
 
 def create_articulation_variant(physics_usd, output_path):
@@ -3387,9 +3466,12 @@ Output as JSON:
 
     print(f"\n  [Phase 3] Upgrading collision to SDF...")
     stage = Usd.Stage.Open(v12_usd)
-    n_sdf = apply_sdf_collision(stage)
+    n_sdf, n_hull = apply_sdf_collision(stage)
     stage.GetRootLayer().Save()
-    print(f"    {n_sdf} colliders → SDF")
+    msg = f"    {n_sdf} colliders → SDF"
+    if n_hull:
+        msg += f", {n_hull} decorative → convexHull"
+    print(msg)
 
     # ── Phase 4: ArticulationRootAPI + FixedJoint (replaces kinematicEnabled) ──
     # Tested: shift+drag, ArticulationCfg, and use_fabric=True all PASS
