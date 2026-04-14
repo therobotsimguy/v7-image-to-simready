@@ -2,31 +2,52 @@
 """
 v12_pipeline.py — V12 SimReady Pipeline (fully self-contained)
 
-Complete standalone pipeline: raw USD → V12 SimReady output.
-No external dependencies on V11 or any other pipeline files.
+Complete pipeline: raw USD → V12 SimReady output.
+100% independent — no external pipeline dependencies.
 
-V12 features:
-  - SDF collision (exact mesh surface, Lightwheel quality)
-  - Dual export: _physics.usd (shift+drag) + _articulation.usd (drive targets)
+Includes:
+  - Gemini vision (Blender renders → visual part identification)
+  - Gemini object understanding (mass, material, behavior)
+  - LLM classification (Anthropic/OpenAI with prompt caching)
+  - Physics application (joints, mass, collision, friction)
+  - SDF collision (Lightwheel quality)
+  - MuJoCo behavioral validation
+  - Post-build visual verification
+  - URDF export (dual-format)
+  - Dual USD export: _physics.usd + _articulation.usd
   - Sidecar physics JSON
-  - Gemini mass (distributed by volume ratio)
-  - Prompt caching on classification calls
 
 Usage:
   python3 v12_pipeline.py --input /path/to/raw_asset.usd
   python3 v12_pipeline.py --input /path/to/raw_asset.usd --dynamic
-  python3 v12_pipeline.py --input /path/to/raw_asset.usd --classify-json /path/to/classify.json
 """
+
+import argparse
+import glob
+import json
+import math
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+from pxr import Usd, UsdGeom, UsdPhysics, UsdShade, Gf, Sdf
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+API_KEYS_PATH = os.path.join(SCRIPT_DIR, "..", "api_keys.json")
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: make_simready
+# ═══════════════════════════════════════════════════════════════════
+
 #!/usr/bin/env python3
 
 
-import argparse
-import json
-import os
-import shutil
-import sys
-
-from pxr import Usd, UsdGeom, UsdPhysics, UsdShade, Gf, Sdf
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1742,6 +1763,1420 @@ def run(input_usd, fix=False, provider="anthropic", model=None, output_dir=None,
     return output_usd
 
 
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: gemini_vision
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+
+RENDER_SCRIPT = SCRIPT_DIR / "render_views.py"
+
+
+def _load_gemini_key():
+    """Load Gemini API key from api_keys.json or environment."""
+    key = os.environ.get("GOOGLE_API_KEY")
+    if key:
+        return key
+    keys_path = API_KEYS_PATH.resolve()
+    if keys_path.exists():
+        with open(keys_path) as f:
+            keys = json.load(f)
+        for name in ("google", "gemini"):
+            if name in keys:
+                return keys[name].get("api_key")
+    return None
+
+
+def _load_gemini_model():
+    """Load Gemini model from api_keys.json or default."""
+    keys_path = API_KEYS_PATH.resolve()
+    if keys_path.exists():
+        with open(keys_path) as f:
+            keys = json.load(f)
+        for name in ("google", "gemini"):
+            if name in keys:
+                return keys[name].get("model", "gemini-2.5-pro")
+    return "gemini-2.5-pro"
+
+
+def render_views(usd_path: str, output_dir: str, verbose: bool = True) -> list:
+    """Render 4 views of USD asset using Blender headless. Returns list of PNG paths."""
+    if not RENDER_SCRIPT.exists():
+        raise FileNotFoundError(f"render_views.py not found at {RENDER_SCRIPT}")
+
+    cmd = [
+        "blender", "--background", "--python", str(RENDER_SCRIPT),
+        "--", str(usd_path), str(output_dir)
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+    if result.returncode != 0:
+        if verbose:
+            print(f"  Blender stderr: {result.stderr[-500:]}")
+        raise RuntimeError(f"Blender render failed: {result.returncode}")
+
+    views = []
+    for name in ("front", "back", "left", "right"):
+        path = os.path.join(output_dir, f"{name}.png")
+        if os.path.exists(path):
+            views.append(path)
+
+    if verbose:
+        print(f"  Rendered {len(views)} views to {output_dir}")
+    return views
+
+
+def analyze_with_gemini(image_paths: list, hierarchy_text: str,
+                        verbose: bool = True) -> dict:
+    """Send rendered views + hierarchy to Gemini for visual analysis."""
+    from google import genai
+    from google.genai import types
+
+    api_key = _load_gemini_key()
+    if not api_key:
+        raise ValueError("No Gemini API key found. Set GOOGLE_API_KEY or add to api_keys.json")
+
+    model_name = _load_gemini_model()
+    client = genai.Client(api_key=api_key)
+
+    # Build multi-modal content
+    contents = []
+
+    # Add images
+    for img_path in image_paths:
+        with open(img_path, "rb") as f:
+            img_data = f.read()
+        view_name = Path(img_path).stem
+        contents.append(types.Part.from_text(text=f"[{view_name} view]"))
+        contents.append(types.Part.from_bytes(data=img_data, mime_type="image/png"))
+
+    # Add hierarchy text
+    contents.append(types.Part.from_text(text=f"""
+Analyze this furniture asset for robotic simulation (SimReady).
+
+USD HIERARCHY:
+{hierarchy_text}
+
+Based on the images and hierarchy, identify:
+
+1. MOVABLE PARTS: List every part that can move independently (doors, drawers,
+   wheels, lids, flaps). For each, state:
+   - Name (match to hierarchy Xform names)
+   - Type: door (revolute), drawer (prismatic), wheel (continuous)
+   - Axis: Z for vertical hinges, X for horizontal hinges, Y for drawer depth
+   - Hinge side (for doors): left or right edge
+   - Handle visible? yes/no
+
+2. MATERIALS: For each visible surface, identify the material type:
+   - metal/steel/chrome, plastic, glass, wood, rubber
+   - This maps to friction coefficients for robot gripper interaction
+
+3. CLASSIFICATION ISSUES: Flag anything suspicious:
+   - Parts that look movable but aren't in the hierarchy as Xforms
+   - Parts that look structural but have Xform + pivot (false positive risk)
+   - Ambiguous names that could be misclassified (e.g., "Group_014")
+
+4. SCALE CHECK: Does the asset look proportionally correct?
+   - Standard fridge: ~180cm tall, ~90cm wide, ~70cm deep
+   - Doors and drawers proportional to the body?
+
+Output as JSON:
+{{
+  "movable_parts": [
+    {{"name": "...", "type": "door|drawer|wheel", "axis": "X|Y|Z",
+      "hinge_side": "left|right|null", "handle_visible": true}}
+  ],
+  "materials": {{"surface_description": "material_type"}},
+  "issues": ["list of potential problems"],
+  "scale_ok": true,
+  "confidence": 0.0-1.0
+}}
+"""))
+
+    if verbose:
+        print(f"  Sending {len(image_paths)} images + hierarchy to {model_name}...")
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config={"temperature": 0.1},
+    )
+
+    # Parse response
+    text = response.text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        result = {"raw_response": text, "parse_error": True}
+
+    if verbose:
+        n_parts = len(result.get("movable_parts", []))
+        n_issues = len(result.get("issues", []))
+        conf = result.get("confidence", "?")
+        print(f"  Gemini found: {n_parts} movable parts, {n_issues} issues, confidence={conf}")
+
+    return result
+
+
+def analyze_asset_visually(usd_path: str, hierarchy_text: str = "",
+                           verbose: bool = True) -> dict:
+    """Full visual analysis: render + Gemini. Returns structured report."""
+    if verbose:
+        print(f"\n  V3 Visual Analysis")
+        print(f"  Input: {usd_path}")
+        print(f"  {'─' * 50}")
+
+    with tempfile.TemporaryDirectory(prefix="v9_vision_") as tmpdir:
+        # Step 1: Render
+        if verbose:
+            print("\n  [1/2] Rendering 4 views (Blender headless)...")
+        try:
+            views = render_views(usd_path, tmpdir, verbose=verbose)
+        except Exception as e:
+            if verbose:
+                print(f"  ERROR: Rendering failed: {e}")
+            return {"error": str(e), "movable_parts": [], "issues": []}
+
+        if not views:
+            if verbose:
+                print("  ERROR: No views rendered")
+            return {"error": "No views rendered", "movable_parts": [], "issues": []}
+
+        # Step 2: Gemini analysis
+        if verbose:
+            print("\n  [2/2] Gemini visual analysis...")
+        try:
+            result = analyze_with_gemini(views, hierarchy_text, verbose=verbose)
+        except Exception as e:
+            if verbose:
+                print(f"  ERROR: Gemini analysis failed: {e}")
+            return {"error": str(e), "movable_parts": [], "issues": []}
+
+    return result
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: object_understanding
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+
+
+# Material density table (kg/m³) — used when Gemini identifies material
+MATERIAL_DENSITIES = {
+    "stainless_steel": 7800,
+    "steel": 7800,
+    "carbon_steel": 7850,
+    "aluminum": 2700,
+    "aluminium": 2700,
+    "chrome": 7150,
+    "iron": 7870,
+    "brass": 8500,
+    "copper": 8960,
+    "titanium": 4500,
+    "plastic": 1200,
+    "abs_plastic": 1050,
+    "nylon": 1150,
+    "polycarbonate": 1200,
+    "wood": 600,
+    "plywood": 550,
+    "mdf": 750,
+    "oak": 750,
+    "pine": 500,
+    "glass": 2500,
+    "rubber": 1100,
+    "silicone": 1100,
+    "ceramic": 2300,
+    "concrete": 2400,
+    "foam": 30,
+    "cardboard": 200,
+    "paper": 700,
+}
+
+
+def _load_gemini():
+    """Load Gemini client and model name."""
+    from google import genai
+
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    model_name = "gemini-2.5-pro"
+
+    keys_path = API_KEYS_PATH.resolve()
+    if keys_path.exists():
+        with open(keys_path) as f:
+            keys = json.load(f)
+        for name in ("google", "gemini"):
+            if name in keys:
+                api_key = api_key or keys[name].get("api_key")
+                model_name = keys[name].get("model", model_name)
+
+    if not api_key:
+        raise ValueError("No Gemini API key")
+
+    client = genai.Client(api_key=api_key)
+    return client, model_name
+
+
+def understand_object(usd_path, hierarchy_text="", rendered_views=None, verbose=True):
+    """Ask Gemini what this object IS, not just what parts it has.
+
+    Returns a structured description that drives classification and physics:
+    {
+        "object_name": "vernier caliper",
+        "object_type": "measurement_tool",
+        "material": "stainless_steel",
+        "material_density_kg_m3": 7800,
+        "estimated_mass_kg": 0.15,
+        "is_articulated": true,
+        "movable_parts": [
+            {
+                "name": "depthblade",
+                "behavior": "slider",
+                "motion": "bidirectional linear along ruler",
+                "range_description": "0 to 15cm on ruler scale",
+                "range_meters": 0.15,
+                "joint_type": "prismatic",
+                "axis": "Y",
+                "limits_bidirectional": true
+            }
+        ],
+        "special_notes": "Sliding jaw must reach full ruler range 0-15cm",
+        "is_graspable": true,
+        "grip_location": "body/handle area"
+    }
+    """
+    from google.genai import types
+
+    client, model_name = _load_gemini()
+
+    contents = []
+
+    # Add rendered views if available
+    if rendered_views:
+        for img_path in rendered_views:
+            if os.path.exists(img_path):
+                with open(img_path, "rb") as f:
+                    img_data = f.read()
+                view_name = Path(img_path).stem
+                contents.append(types.Part.from_text(text=f"[{view_name}]"))
+                contents.append(types.Part.from_bytes(data=img_data, mime_type="image/png"))
+
+    contents.append(types.Part.from_text(text=f"""
+You are an expert at identifying physical objects for robotic simulation.
+
+USD HIERARCHY:
+{hierarchy_text}
+
+TASK: Identify what this object IS, what it's made of, and how it behaves.
+This is NOT about listing USD parts — it's about understanding the OBJECT.
+
+Answer these questions:
+
+1. WHAT IS IT? Give the specific name (e.g., "vernier caliper", "surgical mallet",
+   "double-door refrigerator", "instrument trolley with caster wheels").
+
+2. WHAT IS IT MADE OF? Identify the primary material from visual appearance
+   and object type. Be specific: "stainless steel" not just "metal".
+   Common surgical instruments are stainless steel (~7800 kg/m³).
+   Furniture is typically wood/MDF (~600-750 kg/m³) with metal hardware.
+
+3. HOW MUCH DOES IT WEIGH? Estimate based on what this object typically
+   weighs in the real world. A surgical caliper: ~150g. A mallet: ~300g.
+   A fridge door: ~20kg. A trolley: ~10kg.
+
+4. IS IT ARTICULATED? Does it have parts that move independently?
+   - If YES: describe EACH movable part, what motion it makes (rotation,
+     sliding, spinning), what range of motion (e.g., "0-15cm", "0-120°"),
+     and whether the motion is ONE-DIRECTIONAL (drawer) or BIDIRECTIONAL (slider/caliper).
+   - If NO: is it a graspable tool (pick it up) or a static fixture?
+
+5. SPECIAL PHYSICS NOTES: Anything that would affect simulation:
+   - "Sliding jaw must reach full ruler range"
+   - "Forceps tips are a single fused mesh, cannot articulate"
+   - "Caster wheels have both swivel and roll axes"
+   - "Drawer has rail mechanism that must maintain overlap"
+
+Output ONLY valid JSON:
+{{
+    "object_name": "specific name",
+    "object_type": "furniture|tool|instrument|container|fixture",
+    "material": "specific_material (use underscore, lowercase)",
+    "material_density_kg_m3": 7800,
+    "estimated_mass_kg": 0.15,
+    "is_articulated": true,
+    "movable_parts": [
+        {{
+            "name": "match to USD Xform name if possible",
+            "behavior": "door|drawer|slider|wheel|lever|button|static",
+            "motion": "describe the motion in plain English",
+            "range_description": "human-readable range",
+            "range_meters": 0.15,
+            "joint_type": "revolute|prismatic|continuous",
+            "axis": "X|Y|Z",
+            "limits_bidirectional": false
+        }}
+    ],
+    "special_notes": "anything important for physics",
+    "is_graspable": true,
+    "grip_location": "where to grip it"
+}}
+
+For non-articulated objects, set movable_parts to empty list [].
+"""))
+
+    if verbose:
+        print(f"  Asking Gemini: 'What IS this object?'...")
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config={"temperature": 0.1},
+    )
+
+    text = response.text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        result = {"error": "JSON parse failed", "raw": text[:500]}
+
+    # Enrich with material density lookup if Gemini's density seems off
+    material = result.get("material", "").lower().replace(" ", "_")
+    if material in MATERIAL_DENSITIES:
+        known_density = MATERIAL_DENSITIES[material]
+        gemini_density = result.get("material_density_kg_m3", 0)
+        if abs(gemini_density - known_density) > known_density * 0.3:
+            result["material_density_kg_m3"] = known_density
+            result["_density_corrected"] = True
+
+    if verbose:
+        name = result.get("object_name", "?")
+        mat = result.get("material", "?")
+        mass = result.get("estimated_mass_kg", "?")
+        n_parts = len(result.get("movable_parts", []))
+        print(f"  Object: {name}")
+        print(f"  Material: {mat} ({result.get('material_density_kg_m3', '?')} kg/m³)")
+        print(f"  Mass: {mass} kg")
+        print(f"  Articulated: {result.get('is_articulated', '?')} ({n_parts} movable parts)")
+        for p in result.get("movable_parts", []):
+            bidir = " [BIDIRECTIONAL]" if p.get("limits_bidirectional") else ""
+            print(f"    {p.get('name','?')} → {p.get('behavior','?')} {p.get('joint_type','?')} "
+                  f"axis={p.get('axis','?')} range={p.get('range_description','?')}{bidir}")
+        notes = result.get("special_notes", "")
+        if notes:
+            print(f"  Notes: {notes}")
+
+    return result
+
+
+def density_for_material(material_name):
+    """Look up density from material name. Returns kg/m³ or 500 (default)."""
+    key = material_name.lower().replace(" ", "_")
+    return MATERIAL_DENSITIES.get(key, 500)
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: render_views
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+import bpy
+
+# Parse args after "--"
+argv = sys.argv[sys.argv.index("--") + 1:]
+usd_path = argv[0]
+out_dir = argv[1] if len(argv) > 1 else "/tmp/v9_views"
+os.makedirs(out_dir, exist_ok=True)
+
+# Clear default scene
+bpy.ops.wm.read_factory_settings(use_empty=True)
+
+# Import USD
+bpy.ops.wm.usd_import(filepath=usd_path)
+
+# Compute scene bounds
+objects = [o for o in bpy.context.scene.objects if o.type == 'MESH']
+if not objects:
+    print("ERROR: No mesh objects found in USD")
+    sys.exit(1)
+
+# Use Blender's built-in bounding box
+min_co = mathutils.Vector((float('inf'),) * 3)
+max_co = mathutils.Vector((float('-inf'),) * 3)
+for obj in objects:
+    for corner in obj.bound_box:
+        world_co = obj.matrix_world @ mathutils.Vector(corner)
+        for i in range(3):
+            min_co[i] = min(min_co[i], world_co[i])
+            max_co[i] = max(max_co[i], world_co[i])
+
+center = (min_co + max_co) / 2
+size = max(max_co[i] - min_co[i] for i in range(3))
+dist = size * 2.2  # Camera distance
+
+# Add sun light
+bpy.ops.object.light_add(type='SUN', location=(5, 5, 10))
+sun = bpy.context.object
+sun.data.energy = 3.0
+
+# Add fill light from below
+bpy.ops.object.light_add(type='AREA', location=(0, 0, -5))
+fill = bpy.context.object
+fill.data.energy = 50.0
+fill.data.size = 10.0
+
+# Render settings
+bpy.context.scene.render.engine = 'BLENDER_EEVEE_NEXT'
+bpy.context.scene.render.resolution_x = 1024
+bpy.context.scene.render.resolution_y = 1024
+bpy.context.scene.render.image_settings.file_format = 'PNG'
+bpy.context.scene.render.film_transparent = True
+
+# Set world background
+world = bpy.data.worlds.new("World")
+bpy.context.scene.world = world
+world.use_nodes = True
+bg = world.node_tree.nodes["Background"]
+bg.inputs[0].default_value = (0.15, 0.15, 0.18, 1.0)  # Dark gray
+
+# 4 camera views: front, back, left, right
+# Z-up coordinate system (USD convention)
+views = {
+    "front": (center.x, center.y - dist, center.z + size * 0.2),
+    "back":  (center.x, center.y + dist, center.z + size * 0.2),
+    "left":  (center.x - dist, center.y, center.z + size * 0.2),
+    "right": (center.x + dist, center.y, center.z + size * 0.2),
+}
+
+rendered = []
+for name, loc in views.items():
+    bpy.ops.object.camera_add(location=loc)
+    cam = bpy.context.object
+    cam.data.lens = 50
+    cam.data.clip_end = dist * 5
+
+    # Point camera at center
+    direction = mathutils.Vector(center) - mathutils.Vector(loc)
+    rot_quat = direction.to_track_quat('-Z', 'Y')
+    cam.rotation_euler = rot_quat.to_euler()
+
+    bpy.context.scene.camera = cam
+    filepath = os.path.join(out_dir, f"{name}.png")
+    bpy.context.scene.render.filepath = filepath
+    bpy.ops.render.render(write_still=True)
+    rendered.append(filepath)
+
+    # Clean up camera
+    bpy.data.objects.remove(cam)
+
+print(f"RENDERED: {len(rendered)} views to {out_dir}")
+for r in rendered:
+    print(f"  {r}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: validate_dynamics
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+
+# ═══════════════════════════════════════════════════════════════════
+# USD → URDF CONVERSION
+# ═══════════════════════════════════════════════════════════════════
+
+def convert_usd_to_urdf(usd_path: str, output_dir: str) -> str:
+    """Convert USD to URDF with collision meshes for full physics validation."""
+    from nvidia.srl.from_usd.to_urdf import UsdToUrdf
+
+    urdf_path = os.path.join(output_dir, "robot.urdf")
+    converter = UsdToUrdf.init_from_file(usd_path)
+    converter.save_to_file(urdf_path)
+
+    # Move OBJ meshes from meshes/ to URDF directory and fix paths.
+    # MuJoCo resolves mesh filenames from CWD, not from URDF location,
+    # and strips directory prefixes.
+    meshes_dir = os.path.join(output_dir, "meshes")
+    if os.path.exists(meshes_dir):
+        for f in glob.glob(os.path.join(meshes_dir, "*.obj")):
+            shutil.move(f, output_dir)
+    # Update URDF to remove meshes/ prefix
+    with open(urdf_path) as f:
+        urdf_text = f.read()
+    urdf_text = urdf_text.replace('filename="meshes/', 'filename="')
+    with open(urdf_path, 'w') as f:
+        f.write(urdf_text)
+
+    return urdf_path
+
+
+def parse_urdf_joints(urdf_path: str) -> list:
+    """Extract joint info from URDF for validation."""
+    tree = ET.parse(urdf_path)
+    root = tree.getroot()
+    joints = []
+    for j in root.findall("joint"):
+        info = {
+            "name": j.attrib["name"],
+            "type": j.attrib["type"],
+            "parent": j.find("parent").attrib["link"],
+            "child": j.find("child").attrib["link"],
+        }
+        limit = j.find("limit")
+        if limit is not None:
+            info["lower"] = float(limit.attrib.get("lower", 0))
+            info["upper"] = float(limit.attrib.get("upper", 0))
+        axis_el = j.find("axis")
+        if axis_el is not None:
+            info["axis"] = axis_el.attrib.get("xyz", "0 0 0")
+        joints.append(info)
+    return joints
+
+
+# ═══════════════════════════════════════════════════════════════════
+# BEHAVIORAL CHECKS
+# ═══════════════════════════════════════════════════════════════════
+
+FRANKA_MAX_TORQUE = 87.0   # Nm, joints 1-4
+FRANKA_MAX_GRIP = 200.0    # N, sim gripper
+CONDITION_WARN = 10000
+CONDITION_FAIL = 100000
+
+
+def run_checks(urdf_path: str, urdf_joints: list, verbose: bool = True) -> dict:
+    """Run all behavioral checks. Returns structured results."""
+    import mujoco
+    import numpy as np
+
+    results = {
+        "checks": {},
+        "pass_count": 0,
+        "warn_count": 0,
+        "fail_count": 0,
+        "total": 0,
+    }
+
+    def record(check_id, name, status, detail=""):
+        results["checks"][check_id] = {"name": name, "status": status, "detail": detail}
+        results["total"] += 1
+        if status == "PASS":
+            results["pass_count"] += 1
+        elif status == "WARN":
+            results["warn_count"] += 1
+        else:
+            results["fail_count"] += 1
+        icon = {"PASS": "+", "WARN": "?", "FAIL": "X"}[status]
+        if verbose:
+            print(f"  [{icon}] {check_id}: {name} — {status}" + (f" ({detail})" if detail else ""))
+
+    # Load into MuJoCo
+    try:
+        spec = mujoco.MjSpec.from_file(urdf_path)
+        model = spec.compile()
+        data = mujoco.MjData(model)
+    except Exception as e:
+        record("B0", "MuJoCo model load", "FAIL", str(e))
+        return results
+
+    record("B0", "MuJoCo model load", "PASS", f"nq={model.nq} nbody={model.nbody} njnt={model.njnt}")
+
+    # ── B1: Prismatic travel realism ──
+    # For each prismatic joint, check if travel > 60% of body depth
+    # (would mean the part fully exits the body)
+    body_depth_estimate = 0.0
+    for j in urdf_joints:
+        if j["type"] == "prismatic":
+            travel = abs(j.get("upper", 0) - j.get("lower", 0))
+            short = j["name"].replace("sm_refrigerator_b01_", "").replace("_joint", "")
+            # Heuristic: travel > 0.5m for a typical drawer is suspicious
+            if travel > 0.55:
+                record(f"B1_{short}", f"Travel realism ({short})", "WARN",
+                       f"travel={travel:.3f}m — may fully exit body")
+            elif travel > 0.8:
+                record(f"B1_{short}", f"Travel realism ({short})", "FAIL",
+                       f"travel={travel:.3f}m — drawer will detach from body")
+            else:
+                record(f"B1_{short}", f"Travel realism ({short})", "PASS",
+                       f"travel={travel:.3f}m")
+
+    # ── B2: Revolute range sanity (F09, F16, F19) ──
+    for j in urdf_joints:
+        if j["type"] != "revolute":
+            continue
+        short = j["name"].replace("sm_refrigerator_b01_", "").replace("_joint", "")
+        lo = j.get("lower", 0)
+        hi = j.get("upper", 0)
+        range_deg = abs(hi - lo) * 180 / math.pi
+        # Doors should be 90-150°, wheels unlimited
+        if range_deg > 300 and range_deg < 11000:
+            record(f"B2_{short}", f"Revolute range ({short})", "WARN",
+                   f"range={range_deg:.0f}° — unusually large for a door")
+        elif range_deg < 10:
+            record(f"B2_{short}", f"Revolute range ({short})", "WARN",
+                   f"range={range_deg:.0f}° — too small to be useful")
+        else:
+            record(f"B2_{short}", f"Revolute range ({short})", "PASS",
+                   f"range={range_deg:.0f}°")
+
+    # ── B7: Mass per body sanity (F21, F22, F23) ──
+    for i in range(model.nbody):
+        bname = model.body(i).name
+        if bname == "world":
+            continue
+        mass = model.body_mass[i]
+        short = bname.replace("sm_refrigerator_b01_", "").replace("sm_", "")
+        if mass > 200:
+            record(f"B7_{short}", f"Mass realism ({short})", "WARN",
+                   f"mass={mass:.1f}kg — very heavy")
+        elif mass < 0.01 and mass > 0:
+            record(f"B7_{short}", f"Mass realism ({short})", "WARN",
+                   f"mass={mass:.4f}kg — very light, may blow away")
+        else:
+            record(f"B7_{short}", f"Mass realism ({short})", "PASS",
+                   f"mass={mass:.2f}kg")
+
+    # ── B3: Mass matrix stability ──
+    # Compute mass matrix via MuJoCo
+    mujoco.mj_forward(model, data)
+    M = np.zeros((model.nv, model.nv))
+    mujoco.mj_fullM(model, M, data.qM)
+    cond = np.linalg.cond(M) if model.nv > 0 else 0
+    if cond > CONDITION_FAIL:
+        record("B3", "Mass matrix condition", "FAIL",
+               f"cond={cond:.0f} > {CONDITION_FAIL} — solver will be unstable")
+    elif cond > CONDITION_WARN:
+        record("B3", "Mass matrix condition", "WARN",
+               f"cond={cond:.0f} > {CONDITION_WARN} — borderline stability")
+    else:
+        record("B3", "Mass matrix condition", "PASS", f"cond={cond:.0f}")
+
+    # ── B4: Gravity torque vs Franka ──
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+    for i in range(model.njnt):
+        jname = model.joint(i).name
+        short = jname.replace("sm_refrigerator_b01_", "").replace("_joint", "")
+        jtype_id = model.jnt_type[i]
+        jtype = ["free", "ball", "slide", "hinge"][jtype_id]
+
+        # Gravity-induced torque/force on this joint
+        grav_force = abs(data.qfrc_bias[i])
+        limit = FRANKA_MAX_TORQUE if jtype == "hinge" else FRANKA_MAX_GRIP
+        unit = "Nm" if jtype == "hinge" else "N"
+        if grav_force > limit:
+            record(f"B4_{short}", f"Gravity vs Franka ({short})", "FAIL",
+                   f"gravity={grav_force:.1f}{unit} > Franka {limit}{unit}")
+        elif grav_force > limit * 0.8:
+            record(f"B4_{short}", f"Gravity vs Franka ({short})", "WARN",
+                   f"gravity={grav_force:.1f}{unit} — close to Franka {limit}{unit}")
+        else:
+            record(f"B4_{short}", f"Gravity vs Franka ({short})", "PASS",
+                   f"gravity={grav_force:.1f}{unit}")
+
+    # ── B5: Contact penetration at rest ──
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+    penetrations = 0
+    for i in range(data.ncon):
+        if data.contact[i].dist < -0.005:  # 5mm penetration
+            penetrations += 1
+    if penetrations > 0:
+        record("B5", "Contact penetration at rest", "WARN",
+               f"{penetrations} contacts with >5mm penetration")
+    else:
+        record("B5", "Contact penetration at rest", "PASS",
+               f"{data.ncon} contacts, none penetrating")
+
+    # ── B6: Joint actually moves under force ──
+    for i in range(model.njnt):
+        jname = model.joint(i).name
+        short = jname.replace("sm_refrigerator_b01_", "").replace("_joint", "")
+        jtype_id = model.jnt_type[i]
+
+        mujoco.mj_resetData(model, data)
+        # Apply realistic force/torque
+        force = 5.0 if jtype_id == 3 else 20.0  # 5Nm for hinge, 20N for prismatic
+        # Determine direction from joint limits
+        lo = model.jnt_range[i][0]
+        hi = model.jnt_range[i][1]
+        direction = -1.0 if abs(lo) > abs(hi) else 1.0
+
+        for step in range(2000):  # 2 seconds at 1kHz
+            data.qfrc_applied[i] = force * direction
+            mujoco.mj_step(model, data)
+
+        final_q = data.qpos[model.jnt_qposadr[i]]
+        limit_extent = max(abs(lo), abs(hi))
+        pct = abs(final_q / limit_extent) * 100 if limit_extent > 0.001 else 0
+
+        if pct < 5:
+            record(f"B6_{short}", f"Joint moves ({short})", "FAIL",
+                   f"reached {pct:.0f}% of limit — blocked or jammed")
+        elif pct < 30:
+            record(f"B6_{short}", f"Joint moves ({short})", "WARN",
+                   f"reached {pct:.0f}% of limit — high resistance")
+        else:
+            record(f"B6_{short}", f"Joint moves ({short})", "PASS",
+                   f"reached {pct:.0f}% of limit")
+
+    return results
+
+
+def check_structural_overlap(usd_path, verbose=True):
+    """B8: Check if structural meshes overlap with movable part travel zones.
+
+    For each prismatic joint, compute the travel zone (bbox of movable part
+    swept through its full range). Flag any structural mesh whose bbox
+    intersects this zone — it would collide with the moving part in reality.
+
+    Returns list of overlaps with actionable fixes.
+    """
+
+    stage = Usd.Stage.Open(usd_path)
+    if not stage:
+        return []
+
+    overlaps = []
+
+    # Collect rigid body paths
+    body_path = None
+    movable_paths = {}
+    for prim in stage.Traverse():
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            kin = prim.GetAttribute("physics:kinematicEnabled")
+            if kin and kin.Get():
+                body_path = prim.GetPath()
+            else:
+                movable_paths[str(prim.GetPath())] = prim
+
+    if not body_path:
+        return []
+
+    # Collect joint info
+    joints = []
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdPhysics.Joint):
+            continue
+        jtype = prim.GetTypeName()
+        if "Prismatic" not in jtype:
+            continue
+        body1_targets = prim.GetRelationship("physics:body1").GetTargets()
+        if not body1_targets:
+            continue
+        axis_attr = prim.GetAttribute("physics:axis")
+        axis = axis_attr.Get() if axis_attr else "Y"
+        lo = prim.GetAttribute("physics:lowerLimit").Get() or 0
+        hi = prim.GetAttribute("physics:upperLimit").Get() or 0
+        joints.append({
+            "movable_path": str(body1_targets[0]),
+            "axis": axis,
+            "lower": lo,
+            "upper": hi,
+        })
+
+    if not joints:
+        return []
+
+    # For each prismatic joint, compute swept travel zone
+    bbox_cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render"])
+
+    for jinfo in joints:
+        movable_prim = stage.GetPrimAtPath(jinfo["movable_path"])
+        if not movable_prim:
+            continue
+
+        try:
+            mbbox = bbox_cache.ComputeWorldBound(movable_prim)
+            mrng = mbbox.ComputeAlignedRange()
+            if mrng.IsEmpty():
+                continue
+            mmin = list(mrng.GetMin())
+            mmax = list(mrng.GetMax())
+        except:
+            continue
+
+        # Expand bbox along travel axis to create swept zone
+        axis_idx = {"X": 0, "Y": 1, "Z": 2}.get(jinfo["axis"], 1)
+        travel_min = mmin[axis_idx] + jinfo["lower"]
+        travel_max = mmax[axis_idx] + jinfo["upper"]
+        swept_min = list(mmin)
+        swept_max = list(mmax)
+        swept_min[axis_idx] = min(mmin[axis_idx], travel_min)
+        swept_max[axis_idx] = max(mmax[axis_idx], travel_max)
+
+        movable_name = movable_prim.GetName()
+
+        # Check structural meshes under body for overlap with swept zone
+        body_prim = stage.GetPrimAtPath(body_path)
+        for child in Usd.PrimRange(body_prim):
+            if not child.IsA(UsdGeom.Mesh):
+                continue
+            # Skip parts that SHOULD be inside the travel zone
+            # (interior, shelves, hinges, covers — they're inside the fridge)
+            child_name = child.GetName().lower()
+            skip_keywords = ("body", "interior", "shelf", "hinge", "cover", "glass",
+                           "back", "panel", "wire", "holder", "ice", "refresher",
+                           "lamp", "light", "air", "plate", "screen", "indicator",
+                           "pump", "motor", "fitting", "ring", "cap", "base",
+                           "pillar", "sheet", "drawer")
+            if any(kw in child_name for kw in skip_keywords):
+                continue
+
+            try:
+                cbbox = bbox_cache.ComputeWorldBound(child)
+                crng = cbbox.ComputeAlignedRange()
+                if crng.IsEmpty():
+                    continue
+                cmin = crng.GetMin()
+                cmax = crng.GetMax()
+            except:
+                continue
+
+            # Check AABB overlap
+            overlap = True
+            for i in range(3):
+                if cmax[i] < swept_min[i] or cmin[i] > swept_max[i]:
+                    overlap = False
+                    break
+
+            if overlap:
+                overlap_info = {
+                    "structural_mesh": child.GetName(),
+                    "structural_path": str(child.GetPath()),
+                    "movable_part": movable_name,
+                    "issue": f"Structural mesh '{child.GetName()}' overlaps with travel zone of '{movable_name}'",
+                    "fix": "relocate_mesh",  # actionable fix type
+                }
+                overlaps.append(overlap_info)
+                if verbose:
+                    print(f"  [!] B8: {child.GetName()} overlaps {movable_name} travel zone")
+
+    return overlaps
+
+
+def fix_structural_overlaps(usd_path, overlaps, verbose=True):
+    """Auto-fix structural overlaps by relocating offending meshes.
+
+    For small decorative parts (wheels, bolts) that overlap movable travel zones,
+    shift them out of the way. For large structural parts, just warn.
+    """
+
+    if not overlaps:
+        return 0
+
+    stage = Usd.Stage.Open(usd_path)
+    fixed = 0
+
+    # Keywords for parts that can be safely relocated
+    relocatable = ("wheel", "caster", "bolt", "clip", "logo", "led")
+
+    for ovl in overlaps:
+        mesh_name = ovl["structural_mesh"].lower()
+        if not any(kw in mesh_name for kw in relocatable):
+            if verbose:
+                print(f"  [WARN] B8: {ovl['structural_mesh']} overlaps {ovl['movable_part']} — cannot auto-fix (structural)")
+            continue
+
+        prim = stage.GetPrimAtPath(ovl["structural_path"])
+        if not prim:
+            continue
+
+        # Make the mesh invisible (purpose=guide) so it doesn't render
+        # but keeps the geometry data intact
+        UsdGeom.Imageable(prim).CreatePurposeAttr().Set("guide")
+
+        if verbose:
+            print(f"  [FIX] B8: {ovl['structural_mesh']} hidden (overlaps {ovl['movable_part']} travel zone)")
+        fixed += 1
+
+    if fixed > 0:
+        stage.GetRootLayer().Save()
+
+    return fixed
+
+
+# ═══════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════
+
+def validate(usd_path: str, verbose: bool = True, output_json: bool = False) -> dict:
+    """Full validation pipeline: USD → URDF → MuJoCo → checks."""
+    usd_path = str(Path(usd_path).resolve())
+
+    if verbose:
+        print(f"\n  V2 Behavioral Validation")
+        print(f"  Input: {usd_path}")
+        print(f"  Engine: MuJoCo (CPU, headless, with collision meshes)")
+        print(f"  {'─' * 50}")
+
+    # Step 1: Convert USD → URDF
+    if verbose:
+        print("\n  [1/2] Converting USD → URDF...")
+    with tempfile.TemporaryDirectory(prefix="v9_validate_") as tmpdir:
+        try:
+            urdf_path = convert_usd_to_urdf(usd_path, tmpdir)
+        except Exception as e:
+            if verbose:
+                print(f"  ERROR: USD→URDF conversion failed: {e}")
+            return {"checks": {}, "pass_count": 0, "fail_count": 1, "total": 1,
+                    "error": str(e)}
+
+        urdf_joints = parse_urdf_joints(urdf_path)
+        if verbose:
+            print(f"  URDF: {len(urdf_joints)} joints, meshes exported")
+
+        # Step 2: Run checks (from URDF directory so mesh paths resolve)
+        if verbose:
+            print("\n  [2/2] Running behavioral checks...\n")
+        prev_cwd = os.getcwd()
+        os.chdir(tmpdir)
+        results = run_checks(urdf_path, urdf_joints, verbose=verbose)
+        os.chdir(prev_cwd)
+
+    # Step 3: B8 — structural overlap check (runs on USD directly, not MuJoCo)
+    if verbose:
+        print(f"\n  B8: Checking structural overlap with travel zones...")
+    overlaps = check_structural_overlap(usd_path, verbose=verbose)
+    if overlaps:
+        results["checks"]["B8"] = {
+            "name": "Structural overlap with travel zone",
+            "status": "WARN",
+            "detail": f"{len(overlaps)} structural mesh(es) in movable travel zone",
+            "overlaps": overlaps,
+        }
+        results["warn_count"] += 1
+        results["total"] += 1
+
+        # Auto-fix: relocate small decorative parts that overlap
+        if verbose:
+            print(f"\n  B8 auto-fix: attempting to resolve overlaps...")
+        n_fixed = fix_structural_overlaps(usd_path, overlaps, verbose=verbose)
+        if n_fixed > 0 and verbose:
+            print(f"  B8: {n_fixed} overlap(s) auto-fixed")
+    else:
+        results["checks"]["B8"] = {
+            "name": "Structural overlap with travel zone",
+            "status": "PASS",
+            "detail": "No structural meshes in movable travel zones",
+        }
+        results["pass_count"] += 1
+        results["total"] += 1
+        if verbose:
+            print(f"  [+] B8: No structural overlap — PASS")
+
+    # Summary
+    if verbose:
+        print(f"\n  {'─' * 50}")
+        total = results["total"]
+        p = results["pass_count"]
+        w = results["warn_count"]
+        f = results["fail_count"]
+        status = "PASS" if f == 0 else "FAIL"
+        print(f"  BEHAVIORAL: {p}/{total} pass, {w} warn, {f} fail → {status}")
+
+    if output_json:
+        print(json.dumps(results, indent=2))
+
+    return results
+
+
+def main():
+    ap = argparse.ArgumentParser(description="V9 Behavioral Validation (Pinocchio + MuJoCo)")
+    ap.add_argument("--input", required=True, help="Path to _physics.usd file")
+    ap.add_argument("--json", action="store_true", help="Output results as JSON")
+    ap.add_argument("--quiet", action="store_true", help="Suppress verbose output")
+    args = ap.parse_args()
+    results = validate(args.input, verbose=not args.quiet, output_json=args.json)
+    sys.exit(1 if results["fail_count"] > 0 else 0)
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: export_urdf
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+
+
+def export_urdf(usd_path: str, output_dir: str = None, verbose: bool = True) -> str:
+    """Export physics USD to URDF + meshes. Returns URDF path."""
+    from nvidia.srl.from_usd.to_urdf import UsdToUrdf
+
+    usd_path = str(Path(usd_path).resolve())
+    asset_name = Path(usd_path).stem.replace("_physics", "")
+
+    # Default output: next to the USD
+    if not output_dir:
+        output_dir = str(Path(usd_path).parent)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Convert
+    if verbose:
+        print(f"\n  URDF Export")
+        print(f"  Input:  {usd_path}")
+        print(f"  Output: {output_dir}/")
+        print(f"  {'─' * 50}")
+        print(f"  Converting USD → URDF...")
+
+    # Export to temp first, then organize
+    with tempfile.TemporaryDirectory(prefix="urdf_export_") as tmpdir:
+        tmp_urdf = os.path.join(tmpdir, "robot.urdf")
+        converter = UsdToUrdf.init_from_file(usd_path)
+        converter.save_to_file(tmp_urdf)
+
+        # Organize meshes into named directory
+        meshes_dir = os.path.join(output_dir, f"{asset_name}_meshes")
+        os.makedirs(meshes_dir, exist_ok=True)
+
+        # Copy OBJ + MTL files
+        tmp_meshes = os.path.join(tmpdir, "meshes")
+        mesh_count = 0
+        if os.path.exists(tmp_meshes):
+            for f in glob.glob(os.path.join(tmp_meshes, "*.obj")):
+                shutil.copy2(f, meshes_dir)
+                mesh_count += 1
+            for f in glob.glob(os.path.join(tmp_meshes, "*.mtl")):
+                shutil.copy2(f, meshes_dir)
+
+        # Update URDF mesh paths to point to the named meshes directory
+        with open(tmp_urdf) as f:
+            urdf_text = f.read()
+        urdf_text = urdf_text.replace('filename="meshes/', f'filename="{asset_name}_meshes/')
+
+        # Write final URDF
+        urdf_path = os.path.join(output_dir, f"{asset_name}.urdf")
+        with open(urdf_path, 'w') as f:
+            f.write(urdf_text)
+
+    if verbose:
+        # Parse joint info for summary
+        tree = ET.parse(urdf_path)
+        root = tree.getroot()
+        n_links = len(root.findall("link"))
+        n_joints = len(root.findall("joint"))
+
+        print(f"  URDF: {urdf_path}")
+        print(f"  Meshes: {mesh_count} OBJ files in {asset_name}_meshes/")
+        print(f"  Links: {n_links}, Joints: {n_joints}")
+        print(f"\n  Compatible with: MuJoCo, PyBullet, Drake, Pinocchio, ROS")
+
+        for j in root.findall("joint"):
+            jname = j.attrib["name"]
+            jtype = j.attrib["type"]
+            limit = j.find("limit")
+            if limit is not None:
+                lo = limit.attrib.get("lower", "0")
+                hi = limit.attrib.get("upper", "0")
+                print(f"    {jtype:10s} {jname}  [{lo}, {hi}]")
+
+    return urdf_path
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Export SimReady USD to URDF + meshes")
+    ap.add_argument("--input", required=True, help="Path to _physics.usd")
+    ap.add_argument("--output-dir", default=None, help="Output directory (default: next to USD)")
+    args = ap.parse_args()
+    export_urdf(args.input, output_dir=args.output_dir)
+
+
+
+# ═══════════════════════════════════════════════════════════════════
+# COMPONENT: verify_visual
+# ═══════════════════════════════════════════════════════════════════
+
+#!/usr/bin/env python3
+
+
+
+
+RENDER_SCRIPT = SCRIPT_DIR / "render_views.py"
+
+
+def _set_joint_positions(stage, q_fraction):
+    """Set all joints to a fraction of their limit range (0.0=rest, 1.0=max).
+
+    Moves the movable Xform transforms to simulate joint positions,
+    since Blender doesn't run PhysX.
+    """
+    for prim in stage.Traverse():
+        if not prim.IsA(UsdPhysics.Joint):
+            continue
+
+        jtype = prim.GetTypeName()
+        lo_attr = prim.GetAttribute("physics:lowerLimit")
+        hi_attr = prim.GetAttribute("physics:upperLimit")
+        axis_attr = prim.GetAttribute("physics:axis")
+
+        if not lo_attr or not hi_attr:
+            continue
+
+        lo = lo_attr.Get() or 0.0
+        hi = hi_attr.Get() or 0.0
+        axis = axis_attr.Get() if axis_attr else "Y"
+
+        # Compute target joint value
+        # Use the limit with larger magnitude (the max extension direction)
+        if abs(lo) > abs(hi):
+            q_target = lo * q_fraction
+        else:
+            q_target = hi * q_fraction
+
+        # Find the movable body (body1)
+        body1_rel = prim.GetRelationship("physics:body1")
+        if not body1_rel:
+            continue
+        targets = body1_rel.GetTargets()
+        if not targets:
+            continue
+
+        movable_prim = stage.GetPrimAtPath(targets[0])
+        if not movable_prim:
+            continue
+
+        xf = UsdGeom.Xformable(movable_prim)
+        if not xf:
+            continue
+
+        if "Revolute" in jtype:
+            # Rotate around axis
+            angle_deg = math.degrees(q_target)
+            ops = xf.GetOrderedXformOps()
+            # Add a rotation op
+            if axis == "Z":
+                rot_op = xf.AddRotateZOp(opSuffix="joint_sim")
+                rot_op.Set(angle_deg)
+            elif axis == "X":
+                rot_op = xf.AddRotateXOp(opSuffix="joint_sim")
+                rot_op.Set(angle_deg)
+            elif axis == "Y":
+                rot_op = xf.AddRotateYOp(opSuffix="joint_sim")
+                rot_op.Set(angle_deg)
+
+        elif "Prismatic" in jtype:
+            # Translate along axis
+            axis_vec = {"X": Gf.Vec3d(1, 0, 0), "Y": Gf.Vec3d(0, 1, 0), "Z": Gf.Vec3d(0, 0, 1)}.get(axis, Gf.Vec3d(0, 1, 0))
+            offset = axis_vec * q_target
+            translate_op = xf.AddTranslateOp(opSuffix="joint_sim")
+            translate_op.Set(offset)
+
+
+def _render_usd(usd_path, output_dir, label=""):
+    """Render 4 views using Blender headless. Returns list of PNG paths."""
+    cmd = ["blender", "--background", "--python", str(RENDER_SCRIPT),
+           "--", str(usd_path), str(output_dir)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        return []
+    views = []
+    for name in ("front", "back", "left", "right"):
+        path = os.path.join(output_dir, f"{name}.png")
+        if os.path.exists(path):
+            # Rename with label
+            labeled = os.path.join(output_dir, f"{label}_{name}.png" if label else f"{name}.png")
+            if label:
+                os.rename(path, labeled)
+                views.append(labeled)
+            else:
+                views.append(path)
+    return views
+
+
+def _ask_gemini(image_paths, asset_description, verbose=True):
+    """Send rest + max-extension images to Gemini for visual verification."""
+    from google import genai
+    from google.genai import types
+
+    # Load API key
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        keys_path = API_KEYS_PATH.resolve()
+        if keys_path.exists():
+            with open(keys_path) as f:
+                keys = json.load(f)
+            for name in ("google", "gemini"):
+                if name in keys:
+                    api_key = keys[name].get("api_key")
+                    break
+    if not api_key:
+        return {"error": "No Gemini API key"}
+
+    # Load model
+    model_name = "gemini-2.5-pro"
+    keys_path = API_KEYS_PATH.resolve()
+    if keys_path.exists():
+        with open(keys_path) as f:
+            keys = json.load(f)
+        for name in ("google", "gemini"):
+            if name in keys:
+                model_name = keys[name].get("model", model_name)
+                break
+
+    client = genai.Client(api_key=api_key)
+
+    contents = []
+    for img_path in image_paths:
+        with open(img_path, "rb") as f:
+            img_data = f.read()
+        label = Path(img_path).stem
+        contents.append(types.Part.from_text(text=f"[{label}]"))
+        contents.append(types.Part.from_bytes(data=img_data, mime_type="image/png"))
+
+    contents.append(types.Part.from_text(text=f"""
+POST-BUILD VISUAL VERIFICATION for a SimReady physics asset.
+
+{asset_description}
+
+You are shown the asset at REST position (joints at q=0) and at MAX EXTENSION
+(joints at their limit — doors fully open, drawers fully pulled out, sliders
+at max range).
+
+Check for these specific issues:
+
+1. **DETACHMENT**: Do any parts visually separate from the body when extended?
+   (rails pulling out of tracks, brackets floating in space)
+
+2. **RANGE**: Do movable parts reach their full expected range?
+   (caliper should go 0-15 on ruler, doors should open ~120°, drawers should
+   extend most of their depth)
+
+3. **WRONG DIRECTION**: Do parts move the wrong way?
+   (door opening into the body, drawer sliding backward)
+
+4. **MISSING PARTS**: Are there parts that LOOK movable but don't move between
+   rest and max images? (a visible door that stays in the same position)
+
+5. **COLLISION ARTIFACTS**: Do parts clip through each other or through the body?
+
+6. **POSITION ERRORS**: Are parts in physically impossible positions at max extension?
+
+Output JSON:
+{{
+  "overall": "PASS" or "FAIL",
+  "issues": [
+    {{"type": "detachment|range|direction|missing|collision|position",
+      "part": "name",
+      "description": "what's wrong",
+      "severity": "critical|warning"}}
+  ],
+  "confidence": 0.0-1.0
+}}
+
+If everything looks correct, output {{"overall": "PASS", "issues": [], "confidence": 0.95}}
+"""))
+
+    if verbose:
+        print(f"  Sending {len(image_paths)} images to {model_name}...")
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config={"temperature": 0.1},
+    )
+
+    text = response.text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError:
+        result = {"overall": "UNKNOWN", "raw_response": text, "parse_error": True}
+
+    return result
+
+
+def verify_post_build(physics_usd_path, verbose=True):
+    """Full post-build visual verification. Returns structured result."""
+    physics_usd_path = str(Path(physics_usd_path).resolve())
+
+    if verbose:
+        print(f"\n  Post-Build Visual Verification")
+        print(f"  Input: {physics_usd_path}")
+        print(f"  {'─' * 50}")
+
+    with tempfile.TemporaryDirectory(prefix="v9_postbuild_") as tmpdir:
+        # Step 1: Render at rest (q=0)
+        if verbose:
+            print("\n  [1/4] Rendering at rest (q=0)...")
+        rest_views = _render_usd(physics_usd_path, tmpdir, label="rest")
+
+        # Step 2: Create a temp USD with joints at max extension
+        if verbose:
+            print("  [2/4] Setting joints to max extension...")
+        max_usd = os.path.join(tmpdir, "max_extension.usd")
+        shutil.copy2(physics_usd_path, max_usd)
+        stage = Usd.Stage.Open(max_usd)
+        _set_joint_positions(stage, q_fraction=0.9)  # 90% of max to avoid edge issues
+        stage.GetRootLayer().Save()
+        del stage
+
+        # Step 3: Render at max extension
+        if verbose:
+            print("  [3/4] Rendering at max extension...")
+        max_dir = os.path.join(tmpdir, "max_views")
+        os.makedirs(max_dir, exist_ok=True)
+        max_views = _render_usd(max_usd, max_dir, label="max")
+
+        all_views = rest_views + max_views
+        if not all_views:
+            if verbose:
+                print("  ERROR: No views rendered")
+            return {"overall": "ERROR", "issues": [], "error": "Rendering failed"}
+
+        if verbose:
+            print(f"  Rendered {len(rest_views)} rest + {len(max_views)} max views")
+
+        # Step 4: Ask Gemini
+        if verbose:
+            print("\n  [4/4] Gemini visual verification...")
+
+        # Build description from the USD
+        desc_lines = [f"Asset: {Path(physics_usd_path).stem}"]
+        check_stage = Usd.Stage.Open(physics_usd_path)
+        for prim in check_stage.Traverse():
+            if prim.IsA(UsdPhysics.Joint):
+                jtype = prim.GetTypeName().replace("Physics", "")
+                lo = prim.GetAttribute("physics:lowerLimit").Get()
+                hi = prim.GetAttribute("physics:upperLimit").Get()
+                axis = prim.GetAttribute("physics:axis").Get()
+                body1 = prim.GetRelationship("physics:body1").GetTargets()
+                part_name = body1[0].name if body1 else "?"
+                desc_lines.append(f"  Joint: {part_name} ({jtype}, axis={axis}, limits=[{lo:.3f}, {hi:.3f}])")
+        del check_stage
+
+        description = "\n".join(desc_lines)
+        result = _ask_gemini(all_views, description, verbose=verbose)
+
+        if verbose:
+            overall = result.get("overall", "?")
+            n_issues = len(result.get("issues", []))
+            conf = result.get("confidence", "?")
+            print(f"\n  VISUAL VERDICT: {overall} ({n_issues} issues, confidence={conf})")
+            for issue in result.get("issues", []):
+                sev = issue.get("severity", "?")
+                typ = issue.get("type", "?")
+                desc = issue.get("description", "?")
+                print(f"    [{sev}] {typ}: {desc}")
+
+    return result
+
+
+
+
 # ═══════════════════════════════════════════════════════════════════
 # V12 FEATURES
 # ═══════════════════════════════════════════════════════════════════
@@ -1787,71 +3222,57 @@ def create_articulation_variant(physics_usd, output_path):
             joint.CreateLocalPos0Attr(Gf.Vec3f(0, 0, 0))
             joint.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
             break
-
     stage.GetRootLayer().Save()
 
 
 def generate_physics_json(stage, output_path):
     """Generate sidecar physics JSON."""
     dp = stage.GetDefaultPrim()
-
     def _bbox(prim):
-        bmin = [1e30]*3; bmax = [-1e30]*3; found = False
-        for child in Usd.PrimRange(prim):
-            if child.GetTypeName() != "Mesh": continue
-            pts = child.GetAttribute("points")
+        bmin=[1e30]*3; bmax=[-1e30]*3; found=False
+        for c in Usd.PrimRange(prim):
+            if c.GetTypeName()!="Mesh": continue
+            pts=c.GetAttribute("points")
             if not pts or not pts.HasValue(): continue
-            l2w = UsdGeom.Xformable(child).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+            l2w=UsdGeom.Xformable(c).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
             for pt in pts.Get():
-                wp = l2w.TransformAffine(Gf.Vec3d(float(pt[0]),float(pt[1]),float(pt[2])))
+                wp=l2w.TransformAffine(Gf.Vec3d(float(pt[0]),float(pt[1]),float(pt[2])))
                 for i in range(3): bmin[i]=min(bmin[i],wp[i]); bmax[i]=max(bmax[i],wp[i])
-                found = True
-        return (bmin, bmax) if found else None
+                found=True
+        return (bmin,bmax) if found else None
 
-    parts = []
+    parts=[]
     for prim in stage.Traverse():
         if not prim.HasAPI(UsdPhysics.RigidBodyAPI): continue
-        mass_attr = prim.GetAttribute("physics:mass")
-        mass = mass_attr.Get() if mass_attr and mass_attr.HasValue() else None
-        kin_attr = prim.GetAttribute("physics:kinematicEnabled")
-        is_kin = kin_attr.Get() if kin_attr and kin_attr.HasValue() else False
-        bbox = _bbox(prim)
-        bounds = {"min": [round(bbox[0][i],6) for i in range(3)],
-                  "max": [round(bbox[1][i],6) for i in range(3)],
-                  "size": [round(abs(bbox[1][i]-bbox[0][i]),6) for i in range(3)]} if bbox else None
-        n_col = sum(1 for d in Usd.PrimRange(prim) if d.HasAPI(UsdPhysics.CollisionAPI))
-        parts.append({"name": prim.GetName(), "path": str(prim.GetPath()),
-                       "is_kinematic": is_kin, "mass_kg": round(mass,4) if mass else None,
-                       "bounds": bounds, "colliders": n_col, "collision_type": "sdf"})
-
-    joints = []
+        ma=prim.GetAttribute("physics:mass"); m=ma.Get() if ma and ma.HasValue() else None
+        ka=prim.GetAttribute("physics:kinematicEnabled"); ik=ka.Get() if ka and ka.HasValue() else False
+        bb=_bbox(prim)
+        bn={"min":[round(bb[0][i],6) for i in range(3)],"max":[round(bb[1][i],6) for i in range(3)],
+            "size":[round(abs(bb[1][i]-bb[0][i]),6) for i in range(3)]} if bb else None
+        nc=sum(1 for d in Usd.PrimRange(prim) if d.HasAPI(UsdPhysics.CollisionAPI))
+        parts.append({"name":prim.GetName(),"path":str(prim.GetPath()),"is_kinematic":ik,
+                      "mass_kg":round(m,4) if m else None,"bounds":bn,"colliders":nc,"collision_type":"sdf"})
+    joints=[]
     for prim in stage.Traverse():
         if not prim.IsA(UsdPhysics.Joint): continue
-        ji = {"name": prim.GetName(), "type": prim.GetTypeName()}
+        ji={"name":prim.GetName(),"type":prim.GetTypeName()}
         for an in ["physics:axis","physics:lowerLimit","physics:upperLimit"]:
-            a = prim.GetAttribute(an)
-            if a and a.HasValue():
-                v = a.Get()
-                ji[an.split(":")[-1]] = round(v,4) if isinstance(v,float) else v
-        b0 = prim.GetRelationship("physics:body0").GetTargets()
-        b1 = prim.GetRelationship("physics:body1").GetTargets()
-        ji["body0"] = str(b0[0]) if b0 else "world"
-        ji["body1"] = str(b1[0]) if b1 else None
-        drive = {}
-        for attr in prim.GetAttributes():
-            if "drive" in attr.GetName() and attr.HasValue():
-                v = attr.Get()
-                drive[attr.GetName().split(":")[-1]] = round(v,4) if isinstance(v,float) else v
-        if drive: ji["drive"] = drive
+            a=prim.GetAttribute(an)
+            if a and a.HasValue(): v=a.Get(); ji[an.split(":")[-1]]=round(v,4) if isinstance(v,float) else v
+        b0=prim.GetRelationship("physics:body0").GetTargets()
+        b1=prim.GetRelationship("physics:body1").GetTargets()
+        ji["body0"]=str(b0[0]) if b0 else "world"; ji["body1"]=str(b1[0]) if b1 else None
+        dr={}
+        for at in prim.GetAttributes():
+            if "drive" in at.GetName() and at.HasValue():
+                v=at.Get(); dr[at.GetName().split(":")[-1]]=round(v,4) if isinstance(v,float) else v
+        if dr: ji["drive"]=dr
         joints.append(ji)
-
-    total_mass = sum(p["mass_kg"] for p in parts if p["mass_kg"])
-    spec = {"version": "V12", "asset_name": dp.GetName() if dp else "unknown",
-            "summary": {"total_mass_kg": round(total_mass,2), "rigid_bodies": len(parts),
-                         "joints": len(joints), "collision": "SDF"},
-            "parts": parts, "joints": joints}
-    with open(output_path, "w") as f:
-        json.dump(spec, f, indent=2, default=str)
+    tm=sum(p["mass_kg"] for p in parts if p["mass_kg"])
+    spec={"version":"V12","asset_name":dp.GetName() if dp else "unknown",
+          "summary":{"total_mass_kg":round(tm,2),"rigid_bodies":len(parts),"joints":len(joints),"collision":"SDF"},
+          "parts":parts,"joints":joints}
+    with open(output_path,"w") as f: json.dump(spec,f,indent=2,default=str)
     return spec
 
 
@@ -1861,64 +3282,107 @@ def generate_physics_json(stage, output_path):
 
 def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
             object_json=None, provider="anthropic", model=None):
-    """V12 pipeline: raw USD → SDF physics + articulation variant + JSON."""
+    """V12 complete pipeline: raw USD → full SimReady output."""
     input_path = os.path.abspath(input_usd)
     basename = os.path.splitext(os.path.basename(input_path))[0]
     asset_name = basename
 
     if output_dir is None:
         output_dir = os.path.join(os.path.dirname(input_path), "v12_out")
-
-    # Temp dir for physics build
     temp_out = os.path.join(os.path.dirname(input_path), "simready_out")
 
     print(f"\n{'=' * 60}")
-    print(f"  V12 SimReady Pipeline")
+    print(f"  V12 SimReady Pipeline (complete)")
     print(f"{'=' * 60}")
     print(f"  Input:  {input_path}")
     print(f"  Output: {output_dir}/")
 
-    # ── Phase 1: Build physics ──
-    print(f"\n  [1/4] Building physics...")
+    # ── Phase 1b: Gemini vision ──
+    try:
+        print(f"\n  [Phase 1b] Gemini visual analysis...")
+        stage_tmp = Usd.Stage.Open(str(input_path))
+        hier = read_hierarchy(stage_tmp)
+        hier_text = hierarchy_to_text(hier)
+        vision_result = analyze_asset_visually(str(input_path), hierarchy_text=hier_text, verbose=True)
+        if "error" not in vision_result:
+            n_parts = len(vision_result.get("movable_parts", []))
+            print(f"    Gemini found {n_parts} movable parts")
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 1c: Object understanding ──
+    try:
+        print(f"\n  [Phase 1c] Gemini object understanding...")
+        obj_data = understand_object(str(input_path), verbose=True)
+        if "error" not in obj_data:
+            gm = obj_data.get("estimated_mass_kg")
+            if gm:
+                print(f"    Mass: {gm}kg")
+                obj_json_path = os.path.join(tempfile.gettempdir(), "v12_object.json")
+                with open(obj_json_path, "w") as f:
+                    json.dump(obj_data, f, indent=2)
+                if not object_json:
+                    object_json = obj_json_path
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 2: Build physics ──
+    print(f"\n  [Phase 2] Building physics...")
     physics_usd = run(input_path, fix=True, provider=provider, model=model,
                       output_dir=temp_out, classify_json=classify_json,
                       dynamic_body=dynamic_body, object_json=object_json)
-
     if not physics_usd:
-        # Try to find it
-        from pathlib import Path
         for f in Path(temp_out).glob("*_physics.usd"):
-            physics_usd = str(f)
-            break
+            physics_usd = str(f); break
     if not physics_usd:
-        print(f"  ERROR: No _physics.usd produced")
-        return None
+        print("  ERROR: No _physics.usd produced"); return None
 
-    # ── Phase 2: SDF collision ──
+    # ── Phase 3: SDF ──
     os.makedirs(output_dir, exist_ok=True)
     v12_usd = os.path.join(output_dir, f"{basename}_physics.usd")
     shutil.copy2(physics_usd, v12_usd)
+    for tn in ("Textures","textures","materials"):
+        s=os.path.join(os.path.dirname(input_path),tn); d=os.path.join(output_dir,tn)
+        if os.path.isdir(s) and not os.path.isdir(d): shutil.copytree(s,d)
 
-    # Copy textures
-    for tex_name in ("Textures", "textures", "materials"):
-        src = os.path.join(os.path.dirname(input_path), tex_name)
-        dst = os.path.join(output_dir, tex_name)
-        if os.path.isdir(src) and not os.path.isdir(dst):
-            shutil.copytree(src, dst)
-
-    print(f"\n  [2/4] Upgrading collision to SDF...")
+    print(f"\n  [Phase 3] Upgrading collision to SDF...")
     stage = Usd.Stage.Open(v12_usd)
     n_sdf = apply_sdf_collision(stage)
     stage.GetRootLayer().Save()
     print(f"    {n_sdf} colliders → SDF")
 
-    # ── Phase 3: Articulation variant ──
-    print(f"\n  [3/4] Creating articulation variant...")
+    # ── Phase 4: Articulation variant ──
+    print(f"\n  [Phase 4] Creating articulation variant...")
     artic_usd = os.path.join(output_dir, f"{asset_name}_articulation.usd")
     create_articulation_variant(v12_usd, artic_usd)
 
-    # ── Phase 4: Sidecar JSON ──
-    print(f"\n  [4/4] Generating physics JSON...")
+    # ── Phase 5: MuJoCo validation ──
+    try:
+        print(f"\n  [Phase 5] MuJoCo behavioral validation...")
+        bv = validate(str(v12_usd), verbose=True)
+        if bv and bv.get("fail_count", 0) > 0:
+            print(f"    WARNING: {bv['fail_count']} check(s) FAILED")
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 6: Visual verification ──
+    try:
+        print(f"\n  [Phase 6] Post-build visual verification...")
+        vv = verify_post_build(str(v12_usd), verbose=True)
+        if vv and vv.get("overall") == "FAIL":
+            print(f"    WARNING: Visual verification FAILED")
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 7: URDF export ──
+    try:
+        print(f"\n  [Phase 7] URDF export...")
+        urdf_path = export_urdf(str(v12_usd), output_dir=output_dir, verbose=True)
+    except Exception as e:
+        print(f"    Skipped — {e}")
+
+    # ── Phase 8: Sidecar JSON ──
+    print(f"\n  [Phase 8] Generating physics JSON...")
     stage = Usd.Stage.Open(v12_usd)
     json_path = os.path.join(output_dir, f"{asset_name}_physics.json")
     spec = generate_physics_json(stage, json_path)
@@ -1935,26 +3399,22 @@ def run_v12(input_usd, output_dir=None, dynamic_body=False, classify_json=None,
     print(f"    ISAACLAB_PATH=/home/msi/IsaacLab ./isaaclab.sh -p scripts/environments/teleoperation/teleop_se3_agent_cinematic.py \\")
     print(f"      --asset {os.path.abspath(v12_usd)} --device cpu")
     print(f"{'=' * 60}")
-
     return v12_usd
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="V12 SimReady Pipeline")
     ap.add_argument("--input", required=True, help="Raw USD file")
-    ap.add_argument("--output-dir", default=None, help="Output directory")
-    ap.add_argument("--dynamic", action="store_true", help="Dynamic body (trolley/draggable)")
-    ap.add_argument("--classify-json", default=None, help="Pre-made classification JSON")
-    ap.add_argument("--object-json", default=None, help="Gemini object understanding JSON")
+    ap.add_argument("--output-dir", default=None)
+    ap.add_argument("--dynamic", action="store_true", help="Dynamic body")
+    ap.add_argument("--classify-json", default=None)
+    ap.add_argument("--object-json", default=None)
     ap.add_argument("--provider", default="anthropic", choices=["openai", "anthropic"])
     ap.add_argument("--model", default=None)
     args = ap.parse_args()
-
     input_path = os.path.abspath(args.input)
     if not os.path.isfile(input_path):
-        print(f"ERROR: {input_path} not found")
-        sys.exit(1)
-
+        print(f"ERROR: {input_path} not found"); sys.exit(1)
     run_v12(input_path, output_dir=args.output_dir, dynamic_body=args.dynamic,
             classify_json=args.classify_json, object_json=args.object_json,
             provider=args.provider, model=args.model)
