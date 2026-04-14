@@ -3,85 +3,48 @@
 v12_pipeline.py — V12 SimReady Pipeline (standalone)
 
 Complete pipeline: raw USD → V12 SimReady output.
-Calls V11 (make_simready.py) internally for physics, then applies V12 upgrades.
+One command, fast, no agent SDK.
 
-V12 = V11 + SDF collision + dual export + sidecar JSON
+V12 features:
+  - SDF collision (exact mesh surface, Lightwheel quality)
+  - Dual export: _physics.usd (shift+drag) + _articulation.usd (drive targets)
+  - Sidecar physics JSON
+  - Gemini mass (distributed by volume ratio)
+  - Prompt caching on classification calls
 
 Usage:
-  python3 v12_pipeline.py --input /path/to/raw_asset.usd --fix
-  python3 v12_pipeline.py --input /path/to/raw_asset.usd --fix --dynamic
-  python3 v12_pipeline.py --input /path/to/raw_asset.usd --fix --classify-json /path/to/classify.json
+  python3 v12_pipeline.py --input /path/to/raw_asset.usd
+  python3 v12_pipeline.py --input /path/to/raw_asset.usd --dynamic
+  python3 v12_pipeline.py --input /path/to/raw_asset.usd --classify-json /path/to/classify.json
 """
 
 import argparse
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
+# Add script dir to path so we can import make_simready directly
+SCRIPT_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SCRIPT_DIR))
+
 from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-SIMREADY_AGENT = SCRIPT_DIR / "simready_agent.py"
-V12_UPGRADE = SCRIPT_DIR / "v12_upgrade.py"
+# Import make_simready functions directly (no subprocess, no agent SDK)
+from make_simready import run as run_make_simready
 
 
-def find_physics_usd(output_dir, asset_name):
-    """Find the _physics.usd file for a specific asset produced by make_simready.py."""
-    # Try exact match first
-    exact = Path(output_dir) / f"{asset_name}_physics.usd"
-    if exact.exists():
-        return str(exact)
-    # Fallback: any _physics.usd
+def find_physics_usd(output_dir):
+    """Find the _physics.usd file produced by make_simready."""
     for f in Path(output_dir).glob("*_physics.usd"):
         return str(f)
     return None
 
 
-def run_v11(input_usd, dynamic=False):
-    """Run V11 simready_agent.py — full pipeline with Gemini vision + object understanding + classification."""
-    cmd = [sys.executable, str(SIMREADY_AGENT), "--input", input_usd]
-    if dynamic:
-        cmd.append("--dynamic")
-
-    print(f"\n{'=' * 60}")
-    print(f"  V12 Pipeline — Phase 1: Build Physics")
-    print(f"  (Gemini vision + object understanding + classification)")
-    print(f"{'=' * 60}")
-
-    result = subprocess.run(cmd, capture_output=False, text=True)
-    if result.returncode != 0:
-        print(f"  ERROR: simready_agent.py failed (exit {result.returncode})")
-        return None
-    return True
-
-
-def run_v12_upgrade(physics_usd, output_dir):
-    """Apply V12 upgrades: SDF + dual export + sidecar JSON."""
-    print(f"\n{'=' * 60}")
-    print(f"  V12 Pipeline — Phase 2: V12 Upgrades")
-    print(f"{'=' * 60}")
-
-    # Copy physics USD to v12 output
-    basename = os.path.splitext(os.path.basename(physics_usd))[0]
-    asset_name = basename.replace("_physics", "")
-    os.makedirs(output_dir, exist_ok=True)
-    v12_usd = os.path.join(output_dir, f"{basename}.usd")
-    shutil.copy2(physics_usd, v12_usd)
-
-    # Copy textures
-    src_tex = os.path.join(os.path.dirname(physics_usd), "Textures")
-    dst_tex = os.path.join(output_dir, "Textures")
-    if os.path.isdir(src_tex) and not os.path.isdir(dst_tex):
-        shutil.copytree(src_tex, dst_tex)
-        print(f"  Textures bundled")
-
-    # --- SDF collision ---
-    print(f"\n  [1/3] Upgrading collision to SDF (exact mesh surface)...")
-    stage = Usd.Stage.Open(v12_usd)
-    n_switched = 0
+def apply_sdf(stage):
+    """Switch all collision shapes to SDF."""
+    n = 0
     for prim in stage.Traverse():
         if prim.HasAPI(UsdPhysics.CollisionAPI):
             mc = UsdPhysics.MeshCollisionAPI.Apply(prim)
@@ -89,19 +52,17 @@ def run_v12_upgrade(physics_usd, output_dir):
             for prop_name in [p.GetName() for p in prim.GetAuthoredProperties()]:
                 if "physxConvex" in prop_name:
                     prim.RemoveProperty(prop_name)
-            n_switched += 1
-    stage.GetRootLayer().Save()
-    print(f"    Switched {n_switched} colliders to SDF")
+            n += 1
+    return n
 
-    # --- Dual export ---
-    print(f"\n  [2/3] Creating articulation variant...")
-    artic_usd = os.path.join(output_dir, f"{asset_name}_articulation.usd")
-    shutil.copy2(v12_usd, artic_usd)
-    artic_stage = Usd.Stage.Open(artic_usd)
-    dp = artic_stage.GetDefaultPrim()
 
-    # Add ArticulationRootAPI
-    dp_spec = artic_stage.GetRootLayer().GetPrimAtPath(dp.GetPath())
+def create_articulation_variant(physics_usd, output_path):
+    """Create ArticulationRootAPI variant."""
+    shutil.copy2(physics_usd, output_path)
+    stage = Usd.Stage.Open(output_path)
+    dp = stage.GetDefaultPrim()
+
+    dp_spec = stage.GetRootLayer().GetPrimAtPath(dp.GetPath())
     schemas = dp_spec.GetInfo("apiSchemas")
     items = list(schemas.prependedItems) if schemas and hasattr(schemas, "prependedItems") else []
     if "PhysicsArticulationRootAPI" not in items:
@@ -110,26 +71,27 @@ def run_v12_upgrade(physics_usd, output_dir):
         new_list.prependedItems = items
         dp_spec.SetInfo("apiSchemas", new_list)
 
-    for prim in artic_stage.Traverse():
+    for prim in stage.Traverse():
         if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
             continue
         kin_attr = prim.GetAttribute("physics:kinematicEnabled")
         if kin_attr and kin_attr.Get():
             prim.RemoveProperty("physics:kinematicEnabled")
             joint_path = prim.GetPath().AppendChild("FixedJoint")
-            joint = UsdPhysics.FixedJoint.Define(artic_stage, joint_path)
+            joint = UsdPhysics.FixedJoint.Define(stage, joint_path)
             joint.CreateBody1Rel().SetTargets([prim.GetPath()])
             joint.CreateLocalPos0Attr(Gf.Vec3f(0, 0, 0))
             joint.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
             break
-    artic_stage.GetRootLayer().Save()
-    print(f"    Saved: {artic_usd}")
 
-    # --- Sidecar JSON ---
-    print(f"\n  [3/3] Generating sidecar physics JSON...")
-    stage = Usd.Stage.Open(v12_usd)
+    stage.GetRootLayer().Save()
 
-    def _mesh_bbox(prim):
+
+def generate_physics_json(stage, output_path):
+    """Generate sidecar physics JSON."""
+    dp = stage.GetDefaultPrim()
+
+    def _bbox(prim):
         bmin = [1e30]*3; bmax = [-1e30]*3; found = False
         for child in Usd.PrimRange(prim):
             if child.GetTypeName() != "Mesh": continue
@@ -149,21 +111,14 @@ def run_v12_upgrade(physics_usd, output_dir):
         mass = mass_attr.Get() if mass_attr and mass_attr.HasValue() else None
         kin_attr = prim.GetAttribute("physics:kinematicEnabled")
         is_kin = kin_attr.Get() if kin_attr and kin_attr.HasValue() else False
-        bbox = _mesh_bbox(prim)
-        bounds = None
-        if bbox:
-            bmin, bmax = bbox
-            bounds = {
-                "min": [round(bmin[i],6) for i in range(3)],
-                "max": [round(bmax[i],6) for i in range(3)],
-                "size": [round(abs(bmax[i]-bmin[i]),6) for i in range(3)],
-            }
+        bbox = _bbox(prim)
+        bounds = {"min": [round(bbox[0][i],6) for i in range(3)],
+                  "max": [round(bbox[1][i],6) for i in range(3)],
+                  "size": [round(abs(bbox[1][i]-bbox[0][i]),6) for i in range(3)]} if bbox else None
         n_col = sum(1 for d in Usd.PrimRange(prim) if d.HasAPI(UsdPhysics.CollisionAPI))
-        parts.append({
-            "name": prim.GetName(), "path": str(prim.GetPath()),
-            "is_kinematic": is_kin, "mass_kg": round(mass,4) if mass else None,
-            "bounds": bounds, "colliders": n_col, "collision_type": "sdf",
-        })
+        parts.append({"name": prim.GetName(), "path": str(prim.GetPath()),
+                       "is_kinematic": is_kin, "mass_kg": round(mass,4) if mass else None,
+                       "bounds": bounds, "colliders": n_col, "collision_type": "sdf"})
 
     joints = []
     for prim in stage.Traverse():
@@ -181,36 +136,30 @@ def run_v12_upgrade(physics_usd, output_dir):
         drive = {}
         for attr in prim.GetAttributes():
             if "drive" in attr.GetName() and attr.HasValue():
-                drive[attr.GetName().split(":")[-1]] = round(attr.Get(),4) if isinstance(attr.Get(),float) else attr.Get()
+                v = attr.Get()
+                drive[attr.GetName().split(":")[-1]] = round(v,4) if isinstance(v,float) else v
         if drive: ji["drive"] = drive
         joints.append(ji)
 
     total_mass = sum(p["mass_kg"] for p in parts if p["mass_kg"])
-    spec = {
-        "version": "V12",
-        "asset_name": dp.GetName() if dp else "unknown",
-        "summary": {
-            "total_mass_kg": round(total_mass,2),
-            "rigid_bodies": len(parts),
-            "joints": len(joints),
-            "collision": "SDF",
-        },
-        "parts": parts, "joints": joints,
-    }
-    json_path = os.path.join(output_dir, f"{asset_name}_physics.json")
-    with open(json_path, "w") as f:
+    spec = {"version": "V12", "asset_name": dp.GetName() if dp else "unknown",
+            "summary": {"total_mass_kg": round(total_mass,2), "rigid_bodies": len(parts),
+                         "joints": len(joints), "collision": "SDF"},
+            "parts": parts, "joints": joints}
+    with open(output_path, "w") as f:
         json.dump(spec, f, indent=2, default=str)
-    print(f"    {len(parts)} bodies, {len(joints)} joints, total mass={total_mass:.2f}kg")
-    print(f"    Saved: {json_path}")
-
-    return v12_usd, artic_usd, json_path
+    return spec
 
 
 def main():
-    ap = argparse.ArgumentParser(description="V12 SimReady Pipeline (standalone)")
+    ap = argparse.ArgumentParser(description="V12 SimReady Pipeline")
     ap.add_argument("--input", required=True, help="Raw USD file")
     ap.add_argument("--output-dir", default=None, help="Output directory")
     ap.add_argument("--dynamic", action="store_true", help="Dynamic body (trolley/draggable)")
+    ap.add_argument("--classify-json", default=None, help="Pre-made classification JSON")
+    ap.add_argument("--object-json", default=None, help="Gemini object understanding JSON")
+    ap.add_argument("--provider", default="anthropic", choices=["openai", "anthropic"])
+    ap.add_argument("--model", default=None)
     args = ap.parse_args()
 
     input_path = os.path.abspath(args.input)
@@ -218,40 +167,73 @@ def main():
         print(f"ERROR: {input_path} not found")
         sys.exit(1)
 
-    # Output directory
     if args.output_dir:
-        out_dir = args.output_dir
+        out_dir = os.path.abspath(args.output_dir)
     else:
         out_dir = os.path.join(os.path.dirname(input_path), "v12_out")
 
-    # simready_agent.py outputs to simready_out/ next to the input
     v11_out = os.path.join(os.path.dirname(input_path), "simready_out")
 
-    # Phase 1: Full agent pipeline (Gemini vision + object understanding + classification)
-    ok = run_v11(input_path, dynamic=args.dynamic)
-    if not ok:
-        sys.exit(1)
-
-    # Find physics USD (match by input asset name)
-    asset_stem = os.path.splitext(os.path.basename(input_path))[0]
-    physics_usd = find_physics_usd(v11_out, asset_stem)
-    if not physics_usd:
-        print(f"ERROR: No _physics.usd found in {v11_out}")
-        sys.exit(1)
-
-    # Phase 2: V12 upgrades
-    v12_usd, artic_usd, json_path = run_v12_upgrade(physics_usd, out_dir)
-
-    # Summary
     print(f"\n{'=' * 60}")
-    print(f"  V12 PIPELINE COMPLETE")
+    print(f"  V12 SimReady Pipeline")
+    print(f"{'=' * 60}")
+    print(f"  Input:  {input_path}")
+    print(f"  Output: {out_dir}/")
+
+    # ── Phase 1: Build physics (direct function call, no subprocess) ──
+    print(f"\n  [1/4] Building physics (classification + joints + mass + collision)...")
+    physics_usd = run_make_simready(
+        input_path, fix=True, provider=args.provider, model=args.model,
+        output_dir=v11_out, classify_json=args.classify_json,
+        dynamic_body=args.dynamic, object_json=args.object_json)
+
+    if not physics_usd:
+        physics_usd = find_physics_usd(v11_out)
+    if not physics_usd:
+        print(f"  ERROR: No _physics.usd produced")
+        sys.exit(1)
+
+    # ── Phase 2: Copy to output + SDF upgrade ──
+    basename = os.path.splitext(os.path.basename(physics_usd))[0]
+    asset_name = basename.replace("_physics", "")
+    os.makedirs(out_dir, exist_ok=True)
+
+    v12_usd = os.path.join(out_dir, f"{basename}.usd")
+    shutil.copy2(physics_usd, v12_usd)
+
+    # Copy textures
+    for tex_name in ("Textures", "textures", "materials"):
+        src_tex = os.path.join(os.path.dirname(input_path), tex_name)
+        dst_tex = os.path.join(out_dir, tex_name)
+        if os.path.isdir(src_tex) and not os.path.isdir(dst_tex):
+            shutil.copytree(src_tex, dst_tex)
+
+    print(f"\n  [2/4] Upgrading collision to SDF...")
+    stage = Usd.Stage.Open(v12_usd)
+    n_sdf = apply_sdf(stage)
+    stage.GetRootLayer().Save()
+    print(f"    {n_sdf} colliders → SDF")
+
+    # ── Phase 3: Dual export ──
+    print(f"\n  [3/4] Creating articulation variant...")
+    artic_usd = os.path.join(out_dir, f"{asset_name}_articulation.usd")
+    create_articulation_variant(v12_usd, artic_usd)
+
+    # ── Phase 4: Sidecar JSON ──
+    print(f"\n  [4/4] Generating physics JSON...")
+    stage = Usd.Stage.Open(v12_usd)
+    json_path = os.path.join(out_dir, f"{asset_name}_physics.json")
+    spec = generate_physics_json(stage, json_path)
+    s = spec["summary"]
+    print(f"    {s['rigid_bodies']} bodies, {s['joints']} joints, {s['total_mass_kg']}kg, SDF collision")
+
+    # ── Done ──
+    print(f"\n{'=' * 60}")
+    print(f"  V12 COMPLETE")
     print(f"{'=' * 60}")
     print(f"  {v12_usd}")
-    print(f"    → SDF collision, shift+drag works")
     print(f"  {artic_usd}")
-    print(f"    → ArticulationRootAPI, drive targets work")
     print(f"  {json_path}")
-    print(f"    → Full physics specification")
     print(f"\n  Test:")
     print(f"    ISAACLAB_PATH=/home/msi/IsaacLab ./isaaclab.sh -p scripts/environments/teleoperation/teleop_se3_agent_cinematic.py \\")
     print(f"      --asset {os.path.abspath(v12_usd)} --device cpu")
