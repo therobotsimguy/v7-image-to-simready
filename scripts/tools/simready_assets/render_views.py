@@ -2,7 +2,7 @@
 """
 render_views.py — Render 4 views of a USD asset using Blender headless.
 
-Usage (called by simready_agent_v9.py, not directly):
+Usage (called by simready_agent.py, not directly):
   blender --background --python render_views.py -- /path/to/asset.usd /path/to/output_dir
 
 Produces: front.png, back.png, left.png, right.png (1024x1024 each)
