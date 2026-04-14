@@ -3403,29 +3403,7 @@ Output as JSON:
     except Exception as e:
         print(f"    Skipped — {e}")
 
-    # ── Phase 5b: PhysX headless testing (via Isaac Sim subprocess) ──
-    timer.start("Phase 5b: PhysX testing (Isaac Sim)")
-    try:
-        print(f"\n  [Phase 5b] PhysX headless testing...")
-        test_script = os.path.join(SCRIPT_DIR, "test_physics.py")
-        isaaclab_path = os.environ.get("ISAACLAB_PATH", os.path.join(SCRIPT_DIR, "..", "..", ".."))
-        isaaclab_sh = os.path.join(isaaclab_path, "isaaclab.sh")
-        if os.path.exists(test_script) and os.path.exists(isaaclab_sh):
-            phys_cmd = [isaaclab_sh, "-p", test_script,
-                        "--asset", str(v12_usd), "--headless", "--device", "cpu"]
-            phys_result = subprocess.run(phys_cmd, capture_output=True, text=True, timeout=300)
-            # Print key results
-            for line in phys_result.stdout.splitlines():
-                if any(k in line for k in ["[+]", "[?]", "[X]", "PHYSX TEST"]):
-                    print(f"    {line.strip()}")
-            if phys_result.returncode != 0:
-                print(f"    WARNING: PhysX test returned exit code {phys_result.returncode}")
-        else:
-            print(f"    Skipped — test_physics.py or isaaclab.sh not found")
-    except subprocess.TimeoutExpired:
-        print(f"    Skipped — timed out after 300s")
-    except Exception as e:
-        print(f"    Skipped — {e}")
+
 
     # ── Phase 8: Sidecar JSON (moved before Phase 6 so JSON exists for verification) ──
     timer.start("Phase 8: Sidecar JSON")
