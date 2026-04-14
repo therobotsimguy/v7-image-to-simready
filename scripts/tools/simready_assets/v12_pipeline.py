@@ -3093,8 +3093,12 @@ def apply_sdf_collision(stage):
     n = 0
     for prim in stage.Traverse():
         if prim.HasAPI(UsdPhysics.CollisionAPI):
-            mc = UsdPhysics.MeshCollisionAPI.Apply(prim)
-            mc.CreateApproximationAttr("sdf")
+            # Apply MeshCollisionAPI
+            UsdPhysics.MeshCollisionAPI.Apply(prim)
+            # Force-set approximation to sdf (overrides any existing value)
+            prim.CreateAttribute("physics:approximation",
+                                 Sdf.ValueTypeNames.Token).Set("sdf")
+            # Remove convexDecomposition params
             for prop_name in [p.GetName() for p in prim.GetAuthoredProperties()]:
                 if "physxConvex" in prop_name:
                     prim.RemoveProperty(prop_name)
@@ -3387,11 +3391,14 @@ Output as JSON:
     stage.GetRootLayer().Save()
     print(f"    {n_sdf} colliders → SDF")
 
-    # ── Phase 4: Add ArticulationRootAPI (required for Newton + drive targets) ──
-    timer.start("Phase 4: ArticulationRootAPI")
-    print(f"\n  [Phase 4] Adding ArticulationRootAPI...")
+    # ── Phase 4: ArticulationRootAPI + FixedJoint (replaces kinematicEnabled) ──
+    # Tested: shift+drag, ArticulationCfg, and use_fabric=True all PASS
+    timer.start("Phase 4: ArticulationRootAPI + FixedJoint")
+    print(f"\n  [Phase 4] ArticulationRootAPI + FixedJoint...")
     stage = Usd.Stage.Open(v12_usd)
     dp = stage.GetDefaultPrim()
+
+    # Add ArticulationRootAPI on default prim
     dp_spec = stage.GetRootLayer().GetPrimAtPath(dp.GetPath())
     schemas = dp_spec.GetInfo("apiSchemas")
     items = list(schemas.prependedItems) if schemas and hasattr(schemas, "prependedItems") else []
@@ -3400,8 +3407,26 @@ Output as JSON:
         new_list = Sdf.TokenListOp()
         new_list.prependedItems = items
         dp_spec.SetInfo("apiSchemas", new_list)
+
+    # Replace kinematicEnabled with FixedJoint to world
+    for prim in stage.Traverse():
+        if not prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        kin_attr = prim.GetAttribute("physics:kinematicEnabled")
+        if kin_attr and kin_attr.Get():
+            prim.RemoveProperty("physics:kinematicEnabled")
+            fj_path = prim.GetPath().AppendChild("WorldJoint")
+            if not stage.GetPrimAtPath(fj_path).IsValid():
+                fj = UsdPhysics.FixedJoint.Define(stage, fj_path)
+                fj.CreateBody1Rel().SetTargets([prim.GetPath()])
+                fj.CreateLocalPos0Attr(Gf.Vec3f(0, 0, 0))
+                fj.CreateLocalPos1Attr(Gf.Vec3f(0, 0, 0))
+            print(f"    {prim.GetName()}: kinematicEnabled → FixedJoint")
+            break
+
     stage.GetRootLayer().Save()
-    print(f"    ArticulationRootAPI on '{dp.GetName()}' (Newton + drive targets + shift+drag all work)")
+    print(f"    ArticulationRootAPI on '{dp.GetName()}'")
+    print(f"    Works with: shift+drag, ArticulationCfg, fabric=True, Newton")
 
     # ── Phase 5: MuJoCo validation ──
     timer.start("Phase 5: MuJoCo validation")
