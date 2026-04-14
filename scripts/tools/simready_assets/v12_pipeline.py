@@ -24,44 +24,36 @@ from pathlib import Path
 from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-MAKE_SIMREADY = SCRIPT_DIR / "make_simready.py"
+SIMREADY_AGENT = SCRIPT_DIR / "simready_agent.py"
 V12_UPGRADE = SCRIPT_DIR / "v12_upgrade.py"
 
 
-def find_physics_usd(output_dir):
-    """Find the _physics.usd file produced by make_simready.py."""
+def find_physics_usd(output_dir, asset_name):
+    """Find the _physics.usd file for a specific asset produced by make_simready.py."""
+    # Try exact match first
+    exact = Path(output_dir) / f"{asset_name}_physics.usd"
+    if exact.exists():
+        return str(exact)
+    # Fallback: any _physics.usd
     for f in Path(output_dir).glob("*_physics.usd"):
         return str(f)
     return None
 
 
-def run_v11(input_usd, fix=True, provider="anthropic", model=None,
-            classify_json=None, dynamic=False, object_json=None, output_dir=None):
-    """Run V11 make_simready.py to build physics from raw USD."""
-    cmd = [sys.executable, str(MAKE_SIMREADY), "--input", input_usd]
-    if fix:
-        cmd.append("--fix")
-    if provider:
-        cmd.extend(["--provider", provider])
-    if model:
-        cmd.extend(["--model", model])
-    if classify_json:
-        cmd.extend(["--classify-json", classify_json])
+def run_v11(input_usd, dynamic=False):
+    """Run V11 simready_agent.py — full pipeline with Gemini vision + object understanding + classification."""
+    cmd = [sys.executable, str(SIMREADY_AGENT), "--input", input_usd]
     if dynamic:
         cmd.append("--dynamic")
-    if object_json:
-        cmd.extend(["--object-json", object_json])
-    if output_dir:
-        cmd.extend(["--output-dir", output_dir])
 
     print(f"\n{'=' * 60}")
-    print(f"  V12 Pipeline — Phase 1: V11 Physics Build")
+    print(f"  V12 Pipeline — Phase 1: Build Physics")
+    print(f"  (Gemini vision + object understanding + classification)")
     print(f"{'=' * 60}")
-    print(f"  Running: {' '.join(cmd[:6])}...")
 
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0:
-        print(f"  ERROR: V11 make_simready.py failed (exit {result.returncode})")
+        print(f"  ERROR: simready_agent.py failed (exit {result.returncode})")
         return None
     return True
 
@@ -217,12 +209,7 @@ def run_v12_upgrade(physics_usd, output_dir):
 def main():
     ap = argparse.ArgumentParser(description="V12 SimReady Pipeline (standalone)")
     ap.add_argument("--input", required=True, help="Raw USD file")
-    ap.add_argument("--fix", action="store_true", help="Apply physics (required for first build)")
     ap.add_argument("--output-dir", default=None, help="Output directory")
-    ap.add_argument("--provider", default="anthropic", choices=["openai", "anthropic"])
-    ap.add_argument("--model", default=None)
-    ap.add_argument("--classify-json", default=None, help="Pre-made classification JSON")
-    ap.add_argument("--object-json", default=None, help="Gemini object understanding JSON")
     ap.add_argument("--dynamic", action="store_true", help="Dynamic body (trolley/draggable)")
     args = ap.parse_args()
 
@@ -237,18 +224,17 @@ def main():
     else:
         out_dir = os.path.join(os.path.dirname(input_path), "v12_out")
 
-    # V11 builds into a temp simready_out, then V12 upgrades into final output
+    # simready_agent.py outputs to simready_out/ next to the input
     v11_out = os.path.join(os.path.dirname(input_path), "simready_out")
 
-    # Phase 1: V11
-    ok = run_v11(input_path, fix=args.fix, provider=args.provider, model=args.model,
-                 classify_json=args.classify_json, dynamic=args.dynamic,
-                 object_json=args.object_json, output_dir=v11_out)
-    if not ok and args.fix:
+    # Phase 1: Full agent pipeline (Gemini vision + object understanding + classification)
+    ok = run_v11(input_path, dynamic=args.dynamic)
+    if not ok:
         sys.exit(1)
 
-    # Find physics USD
-    physics_usd = find_physics_usd(v11_out)
+    # Find physics USD (match by input asset name)
+    asset_stem = os.path.splitext(os.path.basename(input_path))[0]
+    physics_usd = find_physics_usd(v11_out, asset_stem)
     if not physics_usd:
         print(f"ERROR: No _physics.usd found in {v11_out}")
         sys.exit(1)
