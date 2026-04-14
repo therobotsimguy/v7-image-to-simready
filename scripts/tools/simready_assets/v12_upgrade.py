@@ -222,7 +222,7 @@ def generate_physics_json(stage, output_path):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
 
-def upgrade_to_v12(input_usd, output_dir=None, use_sdf=False):
+def upgrade_to_v12(input_usd, output_dir=None):
     """Apply V12 upgrades: SDF collision + dual export + sidecar JSON."""
     input_path = os.path.abspath(input_usd)
     basename = os.path.splitext(os.path.basename(input_path))[0]
@@ -238,21 +238,16 @@ def upgrade_to_v12(input_usd, output_dir=None, use_sdf=False):
     print(f"{'=' * 60}")
     print(f"  Input:     {input_path}")
     print(f"  Output:    {output_dir}/")
-    print(f"  Collision: {'SDF (exact mesh surface)' if use_sdf else 'V11 preserved'}")
-
     # Copy physics USD
     physics_usd = os.path.join(output_dir, f"{basename}.usd")
     shutil.copy2(input_path, physics_usd)
 
-    # SDF collision upgrade
-    if use_sdf:
-        print(f"\n  [1/3] Upgrading collision to SDF...")
-        stage = Usd.Stage.Open(physics_usd)
-        n = upgrade_collision_to_sdf(stage)
-        stage.GetRootLayer().Save()
-        print(f"    Switched {n} colliders to SDF")
-    else:
-        print(f"\n  [1/3] V11 collision preserved")
+    # SDF collision — always applied
+    print(f"\n  [1/3] Upgrading collision to SDF (exact mesh surface)...")
+    stage = Usd.Stage.Open(physics_usd)
+    n = upgrade_collision_to_sdf(stage)
+    stage.GetRootLayer().Save()
+    print(f"    Switched {n} colliders to SDF")
 
     # Copy textures if present
     src_tex = os.path.join(input_dir, "Textures")
@@ -281,7 +276,7 @@ def upgrade_to_v12(input_usd, output_dir=None, use_sdf=False):
     print(f"\n{'=' * 60}")
     print(f"  V12 OUTPUT:")
     print(f"    {physics_usd}")
-    print(f"      → {'SDF collision' if use_sdf else 'V11 collision'}, shift+drag works")
+    print(f"      → SDF collision, shift+drag works")
     print(f"    {artic_usd}")
     print(f"      → ArticulationRootAPI, drive targets work")
     print(f"    {json_path}")
@@ -301,12 +296,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="V12 SimReady Upgrade")
     ap.add_argument("--input", required=True, help="Input _physics.usd from V11")
     ap.add_argument("--output-dir", default=None, help="Output directory")
-    ap.add_argument("--sdf", action="store_true",
-                    help="Switch all colliders to SDF (exact mesh surface)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.input):
         print(f"ERROR: File not found: {args.input}")
         sys.exit(1)
 
-    upgrade_to_v12(args.input, output_dir=args.output_dir, use_sdf=args.sdf)
+    upgrade_to_v12(args.input, output_dir=args.output_dir)
