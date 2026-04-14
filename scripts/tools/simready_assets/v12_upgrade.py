@@ -379,8 +379,9 @@ def generate_physics_json(stage, output_path):
 # MAIN
 # ═══════════════════════════════════════════════════════════════════
 
-def upgrade_to_v12(input_usd, output_dir=None, use_coacd=False, coacd_threshold=0.05):
-    """Apply V12 upgrades: CoACD + dual export + sidecar JSON."""
+def upgrade_to_v12(input_usd, output_dir=None, use_coacd=False, coacd_threshold=0.05,
+                   use_sdf=False):
+    """Apply V12 upgrades: SDF/CoACD collision + dual export + sidecar JSON."""
     input_path = os.path.abspath(input_usd)
     basename = os.path.splitext(os.path.basename(input_path))[0]
     asset_name = basename.replace("_physics", "")
@@ -390,19 +391,42 @@ def upgrade_to_v12(input_usd, output_dir=None, use_coacd=False, coacd_threshold=
         output_dir = os.path.join(input_dir, "v12")
     os.makedirs(output_dir, exist_ok=True)
 
+    collision_mode = "SDF (Lightwheel quality)" if use_sdf else \
+                     "CoACD (threshold={})".format(coacd_threshold) if use_coacd else \
+                     "V11 preserved"
+
     print(f"\n{'=' * 60}")
     print(f"  V12 SimReady Upgrade")
     print(f"{'=' * 60}")
-    print(f"  Input:  {input_path}")
-    print(f"  Output: {output_dir}/")
-    print(f"  CoACD:  {'ON (threshold={})'.format(coacd_threshold) if use_coacd else 'OFF (V11 collision preserved)'}")
+    print(f"  Input:     {input_path}")
+    print(f"  Output:    {output_dir}/")
+    print(f"  Collision: {collision_mode}")
 
     # Copy physics USD
     physics_usd = os.path.join(output_dir, f"{basename}.usd")
     shutil.copy2(input_path, physics_usd)
 
+    # SDF collision upgrade
+    if use_sdf:
+        print(f"\n  [0/3] Upgrading collision to SDF (exact mesh surface)...")
+        stage = Usd.Stage.Open(physics_usd)
+        n_switched = 0
+        for prim in stage.Traverse():
+            if prim.HasAPI(UsdPhysics.CollisionAPI):
+                mc = UsdPhysics.MeshCollisionAPI.Apply(prim)
+                old_approx = prim.GetAttribute("physics:approximation")
+                old_val = old_approx.Get() if old_approx and old_approx.HasValue() else "none"
+                mc.CreateApproximationAttr("sdf")
+                # Remove convexDecomposition params if present
+                for prop_name in [p.GetName() for p in prim.GetAuthoredProperties()]:
+                    if "physxConvex" in prop_name:
+                        prim.RemoveProperty(prop_name)
+                n_switched += 1
+        stage.GetRootLayer().Save()
+        print(f"    Switched {n_switched} colliders to SDF")
+
     # CoACD pre-decomposition
-    if use_coacd:
+    elif use_coacd:
         print(f"\n  [0/3] CoACD pre-decomposition (collision-aware)...")
         stage = Usd.Stage.Open(physics_usd)
         total_pieces = 0
@@ -423,7 +447,7 @@ def upgrade_to_v12(input_usd, output_dir=None, use_coacd=False, coacd_threshold=
         stage.GetRootLayer().Save()
         print(f"    Total: {total_pieces} pre-decomposed convex hulls (zero runtime cost)")
     else:
-        print(f"\n  [0/3] V11 collision preserved (no CoACD)")
+        print(f"\n  [0/3] V11 collision preserved")
 
     # Copy textures if present
     src_tex = os.path.join(input_dir, "Textures")
@@ -472,6 +496,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="V12 SimReady Upgrade")
     ap.add_argument("--input", required=True, help="Input _physics.usd from V11")
     ap.add_argument("--output-dir", default=None, help="Output directory")
+    ap.add_argument("--sdf", action="store_true",
+                    help="Switch all colliders to SDF (exact mesh surface, Lightwheel quality)")
     ap.add_argument("--coacd", action="store_true",
                     help="Enable CoACD pre-decomposition (replaces runtime convexDecomp)")
     ap.add_argument("--coacd-threshold", type=float, default=0.05,
@@ -483,4 +509,5 @@ if __name__ == "__main__":
         sys.exit(1)
 
     upgrade_to_v12(args.input, output_dir=args.output_dir,
-                   use_coacd=args.coacd, coacd_threshold=args.coacd_threshold)
+                   use_coacd=args.coacd, coacd_threshold=args.coacd_threshold,
+                   use_sdf=args.sdf)
