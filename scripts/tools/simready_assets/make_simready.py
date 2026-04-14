@@ -517,12 +517,26 @@ def classify_with_anthropic(hierarchy_text, model=None):
             response = client.messages.create(
                 model=model,
                 max_tokens=4096,
-                system=SYSTEM_PROMPT,
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[
                     {"role": "user", "content": f"Classify this USD hierarchy:\n\n{hierarchy_text}"},
                 ],
                 temperature=0.0,
             )
+            # Log cache performance
+            usage = response.usage
+            cached = getattr(usage, "cache_read_input_tokens", 0)
+            created = getattr(usage, "cache_creation_input_tokens", 0)
+            if cached > 0:
+                print(f"    (prompt cache HIT: {cached} tokens read from cache)")
+            elif created > 0:
+                print(f"    (prompt cache CREATED: {created} tokens cached for next call)")
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
