@@ -76,3 +76,87 @@ tests/
 
 # API Keys — never commit real keys
 scripts/tools/api_keys.json
+
+# ── V8 scope: suppress everything outside the SimReady pipeline ──
+
+# IsaacLab framework directories
+.vscode/
+apps/
+docs/
+source/
+tools/
+docker/
+.github/
+scripts/benchmarks/
+scripts/demos/
+scripts/tutorials/
+scripts/imitation_learning/
+scripts/reinforcement_learning/
+scripts/sim2sim_transfer/
+
+# IsaacLab root files
+.dockerignore
+.gitattributes
+.pre-commit-config.yaml
+CITATION.cff
+CONTRIBUTING.md
+CONTRIBUTORS.md
+LICENSE
+LICENSE-mimic
+README.md
+SECURITY.md
+VERSION
+environment.yml
+pyproject.toml
+isaaclab.bat
+isaaclab.sh
+telemetry.json
+greptile.json
+
+# IsaacLab scripts (non-V8)
+scripts/environments/export_IODescriptors.py
+scripts/environments/list_envs.py
+scripts/environments/random_agent.py
+scripts/environments/zero_agent.py
+scripts/environments/state_machine/
+scripts/environments/teleoperation/teleop_dual_arm.py
+scripts/environments/teleoperation/teleop_se3_agent.py
+scripts/tools/blender_obj.py
+scripts/tools/check_instanceable.py
+scripts/tools/convert_*.py
+scripts/tools/cosmos/
+scripts/tools/hdf5_to_mp4.py
+scripts/tools/Image_repo/
+scripts/tools/kinematic_builders.py
+scripts/tools/merge_hdf5_datasets.py
+scripts/tools/models/
+scripts/tools/mp4_to_hdf5.py
+scripts/tools/process_meshes_to_obj.py
+scripts/tools/record_demos.py
+scripts/tools/replay_demos.py
+scripts/tools/test/
+scripts/tools/train_and_publish_checkpoints.py
+scripts/tools/unified_framework.json
+
+# Legacy pipelines (V3, V7) and old work dirs
+scripts/tools/v3/
+scripts/tools/simready_assets/v7/
+scripts/tools/simready_assets/generate_manifest.py
+scripts/tools/simready_assets/cabinet_*/
+scripts/tools/simready_assets/collision_test/
+scripts/tools/simready_assets/InstrumentTrolley_B/
+scripts/tools/simready_assets/math_skill/
+scripts/tools/simready_assets/memory/
+scripts/tools/simready_assets/refrigerator_a_simready/
+scripts/tools/simready_assets/COMPLETE_BEHAVIOR_SEMANTIC_MAPPING.md
+scripts/tools/simready_assets/*.md
+
+# Archives, models, blender files
+*.zip
+*.pt
+*.blend
+*.blend1
+simready_assets/
+
+# Reference library PDFs (too large for git — keep locally)
+scripts/tools/simready_assets/reference_library/papers_*/*.pdf
